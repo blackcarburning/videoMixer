@@ -1,0 +1,1699 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+import threading
+import time
+import os
+import json
+import winsound
+import queue
+import random
+import ctypes
+
+# --- NATIVE WINDOWS AUDIO ENGINE ---
+class NativeAudioEngine:
+    def __init__(self):
+        self.alias = "vj_audio"
+        self._mci = ctypes.windll.winmm.mciSendStringW
+        self.is_loaded = False
+        self.duration_ms = 0
+        
+    def _send(self, command):
+        buffer = ctypes.create_unicode_buffer(255)
+        error_code = self._mci(command, buffer, 255, 0)
+        return error_code, buffer.value
+
+    def load(self, path):
+        self.stop()
+        self.close()
+        # Quote path to handle spaces
+        cmd = f'open "{path}" type mpegvideo alias {self.alias}'
+        err, _ = self._send(cmd)
+        if err == 0:
+            self.is_loaded = True
+            self._send(f"set {self.alias} time format milliseconds")
+            _, dur_str = self._send(f"status {self.alias} length")
+            try:
+                self.duration_ms = int(dur_str)
+            except:
+                self.duration_ms = 0
+            return True
+        return False
+
+    def play(self, from_ms=0):
+        if not self.is_loaded: return
+        cmd = f"play {self.alias} from {int(from_ms)}"
+        self._send(cmd)
+
+    def is_playing(self):
+        if not self.is_loaded: return False
+        _, status = self._send(f"status {self.alias} mode")
+        return status == "playing"
+
+    def get_position(self):
+        if not self.is_loaded: return 0
+        _, pos_str = self._send(f"status {self.alias} position")
+        try:
+            return int(pos_str)
+        except:
+            return 0
+
+    def pause(self):
+        if self.is_loaded:
+            self._send(f"pause {self.alias}")
+
+    def stop(self):
+        if self.is_loaded:
+            self._send(f"stop {self.alias}")
+            self._send(f"seek {self.alias} to start")
+
+    def close(self):
+        self._send(f"close {self.alias}")
+        self.is_loaded = False
+
+class AudioChannel:
+    def __init__(self):
+        self.engine = NativeAudioEngine()
+        self.enabled = True
+        self.path = None
+        self.playing = False
+        
+    def load(self, path):
+        if os.path.exists(path):
+            self.path = path
+            return self.engine.load(path)
+        return False
+            
+    def play(self, start_time_ms=0):
+        if self.enabled and self.engine.is_loaded:
+            self.engine.play(start_time_ms)
+            self.playing = True
+            
+    def get_time_ms(self):
+        return self.engine.get_position()
+            
+    def is_active(self):
+        return self.engine.is_playing()
+
+    def stop(self):
+        self.engine.stop()
+        self.playing = False
+        
+    def close(self):
+        self.engine.close()
+        self.playing = False
+
+class HighPrecisionMetronome:
+    def __init__(self):
+        self.enabled = False
+        self.volume = 0.5
+        self.high_freq = 1200
+        self.low_freq = 800
+        self.duration = 40
+        self.bpm = 120.0
+        self.beats_per_bar = 4
+        self.lock = threading.Lock()
+        self.current_beat = -1.0
+        
+    def update_volume(self, volume):
+        with self.lock:
+            self.volume = volume
+            self.duration = int(30 + volume * 30)
+    
+    def set_bpm(self, bpm):
+        with self.lock:
+            self.bpm = bpm
+            
+    def set_beats_per_bar(self, beats):
+        with self.lock:
+            self.beats_per_bar = beats
+            
+    def prepare_start(self):
+        self.current_beat = -1.0
+        
+    def synchronized_start(self, start_time):
+        self.current_beat = -1.0
+        
+    def stop(self):
+        self.current_beat = -1.0
+
+    def play_click(self, is_downbeat=False):
+        try:
+            if self.enabled:
+                winsound.Beep(self.high_freq if is_downbeat else self.low_freq, self.duration)
+        except:
+            pass
+    
+    def check_tick(self, beat_pos):
+        if not self.enabled: return
+        cb = int(beat_pos)
+        if cb > int(self.current_beat):
+            is_down = (cb % self.beats_per_bar) == 0
+            threading.Thread(target=self.play_click, args=(is_down,), daemon=True).start()
+        self.current_beat = beat_pos
+
+class Modulator:
+    RATE_OPTIONS = {"1/32": 0.03125, "1/16": 0.0625, "1/8": 0.125, "1/4": 0.25, "1/2": 0.5,
+                    "1": 1.0, "2": 2.0, "4": 4.0, "8": 8.0, "16": 16.0, "32": 32.0}
+    RATE_REVERSE = {v: k for k, v in RATE_OPTIONS.items()}
+    _sin_table = np.sin(np.linspace(0, 2 * np.pi, 4096, dtype=np.float32))
+    WAVE_TYPES = ["sine", "square", "triangle", "saw_forward", "saw_backward", "envelope"]
+
+    def __init__(self):
+        self.wave_type = "sine"
+        self.rate = 1.0
+        self.depth = 1.0
+        self.phase = 0.0
+        self.enabled = False
+        self.pos_only = False
+        self.neg_only = False
+        self.invert = False
+        
+    def get_value(self, beat_position):
+        if not self.enabled or self.depth == 0:
+            return 0.0
+        cp = ((beat_position / self.rate) + self.phase) % 1.0
+        value = 0.0
+        if self.wave_type == "sine":
+            value = Modulator._sin_table[int(cp * 4095)]
+        elif self.wave_type == "square":
+            value = 1.0 if cp < 0.5 else -1.0
+        elif self.wave_type == "triangle":
+            value = 4*cp if cp < 0.25 else (2-4*cp if cp < 0.75 else 4*cp-4)
+        elif self.wave_type == "saw_forward":
+            value = 2.0 * cp - 1.0
+        elif self.wave_type == "saw_backward":
+            value = 1.0 - 2.0 * cp
+        elif self.wave_type == "envelope":
+            value = pow(1.0 - cp, 4) * 2.0 - 1.0 
+            if value < -1.0: value = -1.0
+        if self.invert: value = -value
+        if self.pos_only: value = max(0, value)
+        elif self.neg_only: value = min(0, value)
+        return value * self.depth
+    
+    def to_dict(self):
+        return {'wave_type': self.wave_type, 'rate': self.rate, 'depth': self.depth, 
+                'phase': self.phase, 'enabled': self.enabled, 'pos_only': self.pos_only, 
+                'neg_only': self.neg_only, 'invert': self.invert}
+    
+    def from_dict(self, d):
+        self.wave_type = d.get('wave_type', 'sine')
+        self.rate = d.get('rate', 1.0)
+        self.depth = d.get('depth', 1.0)
+        self.phase = d.get('phase', 0.0)
+        self.enabled = d.get('enabled', False)
+        self.pos_only = d.get('pos_only', False)
+        self.neg_only = d.get('neg_only', False)
+        self.invert = d.get('invert', False)
+    
+    def reset(self):
+        self.wave_type = "sine"
+        self.rate = 1.0
+        self.depth = 1.0
+        self.phase = 0.0
+        self.enabled = False
+        self.pos_only = False
+        self.neg_only = False
+        self.invert = False
+
+class VideoChannel:
+    SPEED_OPTIONS = {"1/6": 1/6, "1/4": 0.25, "1/3": 1/3, "1/2": 0.5, "2/3": 2/3, "3/4": 0.75,
+                     "1": 1.0, "1.5": 1.5, "2": 2.0, "3": 3.0, "4": 4.0, "6": 6.0, "8": 8.0, "12": 12.0, "16": 16.0}
+    SPEED_LABELS = list(SPEED_OPTIONS.keys())
+    LOOP_LENGTH_OPTIONS = {
+        "1/32 bt": 0.03125, "1/16 bt": 0.0625, "1/8 bt": 0.125, "1/4 bt": 0.25, 
+        "1/2 bt": 0.5, "1 bt": 1.0, "2 bt": 2.0, "1 bar": 4.0, "2 bar": 8.0, 
+        "4 bar": 16.0, "8 bar": 32.0
+    }
+    LOOP_LENGTH_LABELS = list(LOOP_LENGTH_OPTIONS.keys())
+    STROBE_RATES = {"1/4": 0.25, "1/8": 0.125, "1/16": 0.0625, "1/32": 0.03125}
+    POSTERIZE_RATES = {"Off": 0.0, "1/16": 0.0625, "1/8": 0.125, "1/4": 0.25, "1/2": 0.5, "1 bt": 1.0}
+    MIRROR_MODES = ["Off", "Horizontal", "Vertical", "Quad", "Kaleido"]
+    
+    def __init__(self, target_width, target_height):
+        self.video_path = None
+        self.cap = None
+        self.frame_count = 0
+        self.fps = 30
+        self.width = 0
+        self.height = 0
+        self.brightness = 0.0
+        self.contrast = 1.0
+        self.saturation = 1.0
+        self.speed = 1.0
+        self.opacity = 1.0
+        self.reverse = False
+        self.glitch_rate = 0.0
+        self.strobe_enabled = False
+        self.strobe_rate = 0.125
+        self.strobe_color = "white"
+        self.posterize_rate = 0.0
+        self.mirror_mode = "Off"
+        self.mosh_amount = 0.0
+        self.mosh_buffer = None
+        self.seq_gate = [1] * 16
+        self.seq_stutter = [0] * 16
+        self.seq_speed = [0] * 16
+        self.seq_jump = [0] * 16
+        self.brightness_mod = Modulator()
+        self.contrast_mod = Modulator()
+        self.saturation_mod = Modulator()
+        self.opacity_mod = Modulator()
+        self.loop_start_mod = Modulator()
+        self.rgb_mod = Modulator()
+        self.blur_mod = Modulator()
+        self.zoom_mod = Modulator()
+        self.pixel_mod = Modulator()
+        self.loop = True
+        self.playback_position = 0.0
+        self.beat_loop_enabled = False
+        self.loop_length_beats = 4.0 
+        self.loop_start_frame = 0
+        self.lock = threading.Lock()
+        self.target_width = target_width
+        self.target_height = target_height
+        self.resized_cache = {}
+        self.cache_size = 120
+        self.current_frame_idx = -1
+        self.current_resized = None
+        self.last_posterize_beat = -1.0
+    
+    def set_target_size(self, w, h):
+        if w != self.target_width or h != self.target_height:
+            self.target_width = w
+            self.target_height = h
+            self.resized_cache.clear()
+            self.current_resized = None
+            self.mosh_buffer = None
+    
+    def to_dict(self, include_video=False):
+        d = {'brightness': self.brightness, 'contrast': self.contrast, 'saturation': self.saturation,
+             'speed': self.speed, 'opacity': self.opacity, 'loop': self.loop,
+             'reverse': self.reverse, 'glitch_rate': self.glitch_rate,
+             'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
+             'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
+             'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
+             'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
+             'beat_loop_enabled': self.beat_loop_enabled, 
+             'loop_length_beats': self.loop_length_beats,
+             'loop_start_frame': self.loop_start_frame,
+             'brightness_mod': self.brightness_mod.to_dict(), 'contrast_mod': self.contrast_mod.to_dict(),
+             'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
+             'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
+             'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict()}
+        if include_video:
+            d['video_path'] = self.video_path
+        return d
+    
+    def from_dict(self, d, load_video=False):
+        with self.lock:
+            self.brightness = d.get('brightness', 0.0)
+            self.contrast = d.get('contrast', 1.0)
+            self.saturation = d.get('saturation', 1.0)
+            self.speed = d.get('speed', 1.0)
+            self.opacity = d.get('opacity', 1.0)
+            self.loop = d.get('loop', True)
+            self.reverse = d.get('reverse', False)
+            self.glitch_rate = d.get('glitch_rate', 0.0)
+            self.strobe_enabled = d.get('strobe_enabled', False)
+            self.strobe_rate = d.get('strobe_rate', 0.125)
+            self.strobe_color = d.get('strobe_color', 'white')
+            self.posterize_rate = d.get('posterize_rate', 0.0)
+            self.mirror_mode = d.get('mirror_mode', "Off")
+            self.mosh_amount = d.get('mosh_amount', 0.0)
+            self.seq_gate = d.get('seq_gate', [1]*16)
+            self.seq_stutter = d.get('seq_stutter', [0]*16)
+            self.seq_speed = d.get('seq_speed', [0]*16)
+            self.seq_jump = d.get('seq_jump', [0]*16)
+            self.beat_loop_enabled = d.get('beat_loop_enabled', False)
+            self.loop_length_beats = d.get('loop_length_beats', 4.0)
+            self.loop_start_frame = d.get('loop_start_frame', 0)
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod']:
+                if m in d:
+                    getattr(self, m).from_dict(d[m])
+            if load_video and d.get('video_path'):
+                self.load_video(d['video_path'])
+        
+    def load_video(self, path):
+        with self.lock:
+            if self.cap:
+                self.cap.release()
+            self.cap = cv2.VideoCapture(path)
+            if not self.cap.isOpened():
+                return False
+            self.video_path = path
+            self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
+            self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.playback_position = 0.0
+            self.resized_cache.clear()
+            self.current_frame_idx = -1
+            self.current_resized = None
+            self.mosh_buffer = None
+            return True
+    
+    def reset_position(self):
+        with self.lock:
+            if self.cap:
+                st = self.loop_start_frame if self.beat_loop_enabled else 0
+                self.playback_position = float(st)
+                self.current_frame_idx = -1
+    
+    def reset_controls(self):
+        with self.lock:
+            self.brightness = 0.0
+            self.contrast = 1.0
+            self.saturation = 1.0
+            self.speed = 1.0
+            self.opacity = 1.0
+            self.loop = True
+            self.reverse = False
+            self.glitch_rate = 0.0
+            self.strobe_enabled = False
+            self.posterize_rate = 0.0
+            self.mirror_mode = "Off"
+            self.mosh_amount = 0.0
+            self.seq_gate = [1] * 16
+            self.seq_stutter = [0] * 16
+            self.seq_speed = [0] * 16
+            self.seq_jump = [0] * 16
+            self.beat_loop_enabled = False
+            self.loop_length_beats = 4.0
+            self.loop_start_frame = 0
+            self.brightness_mod.reset()
+            self.contrast_mod.reset()
+            self.saturation_mod.reset()
+            self.opacity_mod.reset()
+            self.loop_start_mod.reset()
+            self.rgb_mod.reset()
+            self.blur_mod.reset()
+            self.zoom_mod.reset()
+            self.pixel_mod.reset()
+    
+    def _get_resized(self, frame_idx, raw_frame):
+        if frame_idx in self.resized_cache:
+            return self.resized_cache[frame_idx]
+        resized = cv2.resize(raw_frame, (self.target_width, self.target_height), interpolation=cv2.INTER_LINEAR)
+        resized = resized.astype(np.float32) * (1.0/255.0)
+        if len(self.resized_cache) >= self.cache_size:
+            keys = sorted(self.resized_cache.keys())
+            for k in keys[:20]:
+                del self.resized_cache[k]
+        self.resized_cache[frame_idx] = resized
+        return resized
+    
+    def _apply_mirror(self, frame):
+        if self.mirror_mode == "Off":
+            return frame
+        elif self.mirror_mode == "Horizontal":
+            h, w = frame.shape[:2]
+            half = frame[:, :w//2]
+            return np.hstack([half, cv2.flip(half, 1)])
+        elif self.mirror_mode == "Vertical":
+            h, w = frame.shape[:2]
+            half = frame[:h//2, :]
+            return np.vstack([half, cv2.flip(half, 0)])
+        elif self.mirror_mode == "Quad":
+            h, w = frame.shape[:2]
+            q = frame[:h//2, :w//2]
+            top = np.hstack([q, cv2.flip(q, 1)])
+            return np.vstack([top, cv2.flip(top, 0)])
+        elif self.mirror_mode == "Kaleido":
+            h, w = frame.shape[:2]
+            q = frame[:h//2, :w//2]
+            q_flip = cv2.flip(q, 1)
+            top = np.hstack([q, q_flip])
+            bot = cv2.flip(top, 0)
+            return np.vstack([top, bot])
+        return frame
+
+    def get_frame(self, beat_pos, delta_time, bpm, bpb):
+        if not self.cap or self.frame_count == 0:
+            return None
+            
+        with self.lock:
+            target_idx = -1
+            should_update = True
+            if self.posterize_rate > 0:
+                current_slot = int(beat_pos / self.posterize_rate)
+                if current_slot == self.last_posterize_beat: should_update = False
+                else: self.last_posterize_beat = current_slot
+            
+            if not should_update and self.current_resized is not None:
+                frame = self.current_resized
+            else:
+                seq_step = int((beat_pos % 4.0) * 4) % 16
+                spd_mod_idx = self.seq_speed[seq_step]
+                seq_speed_mult = 1.0
+                if spd_mod_idx == 1: seq_speed_mult = 2.0
+                elif spd_mod_idx == 2: seq_speed_mult = 0.5
+                elif spd_mod_idx == 3: seq_speed_mult = -1.0
+                elif spd_mod_idx == 4: seq_speed_mult = 0.0
+                
+                scaled_beat_pos = beat_pos * self.speed
+                jmp_mod_idx = self.seq_jump[seq_step]
+                jump_offset_beats = 0.0
+                if jmp_mod_idx == 1: jump_offset_beats = -1.0
+                elif jmp_mod_idx == 2: jump_offset_beats = -4.0
+                
+                eff_beat_pos = scaled_beat_pos + (jump_offset_beats * self.speed)
+                is_stuttering = self.seq_stutter[seq_step]
+                
+                if is_stuttering or spd_mod_idx == 4: 
+                    quantized_beat = int(eff_beat_pos * 4) / 4.0
+                    if self.beat_loop_enabled:
+                         loop_beats = self.loop_length_beats
+                         if loop_beats <= 0: loop_beats = 1.0
+                         prog = (quantized_beat % loop_beats) / loop_beats
+                         if self.reverse: prog = 1.0 - prog
+                         loop_frames = int(loop_beats * (60.0/bpm) * self.fps)
+                         base_start = self.loop_start_frame
+                         mod_offset = 0
+                         if self.loop_start_mod.enabled:
+                             mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
+                         target_idx = (base_start + mod_offset + int(prog * loop_frames)) % self.frame_count
+                    else:
+                         seconds = quantized_beat * (60.0 / bpm)
+                         target_idx = int(seconds * self.fps) % self.frame_count
+                
+                elif self.beat_loop_enabled:
+                    loop_beats = self.loop_length_beats
+                    if loop_beats <= 0: loop_beats = 1.0
+                    prog = (eff_beat_pos % loop_beats) / loop_beats
+                    eff_rev = self.reverse
+                    if spd_mod_idx == 3: eff_rev = not eff_rev
+                    if eff_rev: prog = 1.0 - prog
+                    loop_frames = int(loop_beats * (60.0 / bpm) * self.fps)
+                    base_start = self.loop_start_frame
+                    mod_offset = 0
+                    if self.loop_start_mod.enabled:
+                        mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
+                    target_idx = (base_start + mod_offset + int(prog * loop_frames)) % self.frame_count
+                
+                else:
+                    frames_to_advance = delta_time * self.fps * self.speed * seq_speed_mult
+                    if self.reverse: self.playback_position -= frames_to_advance
+                    else: self.playback_position += frames_to_advance
+                    if self.loop: self.playback_position %= self.frame_count
+                    else: self.playback_position = min(max(0, self.playback_position), self.frame_count - 1)
+                    target_idx = int(self.playback_position)
+                
+                target_idx = max(0, min(self.frame_count - 1, int(target_idx)))
+                
+                if target_idx != self.current_frame_idx:
+                    if target_idx in self.resized_cache:
+                        self.current_resized = self.resized_cache[target_idx]
+                    else:
+                        cur_pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+                        if abs(cur_pos - target_idx) > 1:
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+                        ret, raw = self.cap.read()
+                        if not ret:
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            ret, raw = self.cap.read()
+                            if not ret: return None
+                            target_idx = 0
+                        self.current_resized = self._get_resized(target_idx, raw)
+                    self.current_frame_idx = target_idx
+                frame = self.current_resized
+
+            if frame is None: return None
+
+            if self.glitch_rate > 0.01 and random.random() < (self.glitch_rate * 0.4):
+                frame = frame.copy()
+                shift_amt = random.randint(-50, 50)
+                axis = random.choice([0, 1])
+                if random.randint(0, 3) == 0:
+                    frame = np.roll(frame, shift_amt, axis=axis)
+                else:
+                    ch = random.randint(0, 2)
+                    frame[:, :, ch] = np.roll(frame[:, :, ch], shift_amt, axis=axis)
+            
+            if self.rgb_mod.enabled and self.rgb_mod.depth > 0:
+                val = self.rgb_mod.get_value(beat_pos) * 100.0 
+                if abs(val) > 1:
+                    if self.glitch_rate <= 0.01: frame = frame.copy()
+                    shift = int(val)
+                    frame[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1) 
+                    frame[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)
+
+        if self.pixel_mod.enabled and self.pixel_mod.depth > 0:
+            pval = (self.pixel_mod.get_value(beat_pos) + 1.0) / 2.0 * 0.95 
+            if pval > 0.05:
+                frame = frame.copy()
+                h, w = frame.shape[:2]
+                factor = 1.0 - pval 
+                small = cv2.resize(frame, (int(w*factor), int(h*factor)), interpolation=cv2.INTER_NEAREST)
+                frame = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+
+        if self.zoom_mod.enabled and self.zoom_mod.depth > 0:
+            zval = (self.zoom_mod.get_value(beat_pos)) * 0.5 
+            scale = 1.0 + max(0.0, zval) 
+            if scale > 1.01:
+                frame = frame.copy()
+                h, w = frame.shape[:2]
+                M = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
+                frame = cv2.warpAffine(frame, M, (w, h))
+
+        if self.blur_mod.enabled and self.blur_mod.depth > 0:
+            bval = (self.blur_mod.get_value(beat_pos) + 1.0) / 2.0 
+            if bval > 0.05:
+                k = int(bval * 30) * 2 + 1 
+                frame = cv2.GaussianBlur(frame, (k, k), 0)
+
+        frame = self._apply_mirror(frame)
+
+        if self.mosh_amount > 0.01:
+            if self.mosh_buffer is None or self.mosh_buffer.shape != frame.shape:
+                self.mosh_buffer = frame.astype(np.float32)
+            else:
+                alpha = 1.0 - self.mosh_amount
+                cv2.addWeighted(frame.astype(np.float32), alpha, self.mosh_buffer, self.mosh_amount, 0, self.mosh_buffer)
+            frame = self.mosh_buffer.astype(np.uint8)
+
+        b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
+        c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
+        s = self.saturation + self.saturation_mod.get_value(beat_pos) * 0.5
+        o = self.opacity + self.opacity_mod.get_value(beat_pos) * 0.5
+        
+        seq_step = int((beat_pos % 4.0) * 4) % 16
+        if not self.seq_gate[seq_step]:
+            o = 0.0
+            
+        b = max(-1.0, min(1.0, b))
+        c = max(0.1, min(3.0, c))
+        s = max(0.0, min(2.0, s))
+        o = max(0.0, min(1.0, o))
+        
+        needs_effects = (b != 0.0 or c != 1.0 or s != 1.0)
+        if needs_effects:
+            if not frame.flags['WRITEABLE']: frame = frame.copy() 
+            frame = (frame + b - 0.5) * c + 0.5
+            if s != 1.0:
+                gray = frame[:,:,0]*0.114 + frame[:,:,1]*0.587 + frame[:,:,2]*0.299
+                frame = gray[:,:,np.newaxis] + s * (frame - gray[:,:,np.newaxis])
+        
+        if self.strobe_enabled:
+            phase = (beat_pos % self.strobe_rate) / self.strobe_rate
+            if phase < 0.5:
+                if self.strobe_color == 'white': frame = np.ones_like(frame)
+                else: frame = np.zeros_like(frame)
+                    
+        return frame, o
+
+class SequencerWidget(tk.Canvas):
+    def __init__(self, parent, channel, attr_name, label, mode="toggle"):
+        super().__init__(parent, height=25, bg="#333", highlightthickness=0)
+        self.channel = channel
+        self.attr_name = attr_name
+        self.mode = mode 
+        self.steps = getattr(channel, attr_name)
+        self.rects = []
+        self.bind("<Button-1>", self.on_click)
+        if self.mode == "toggle": self.colors = ["#444", "#0f0"]
+        elif self.mode == "multi_speed": self.colors = ["#444", "#ff0", "#00f", "#f00", "#000"]
+        elif self.mode == "multi_jump": self.colors = ["#444", "#ff0", "#f00"] 
+        w = 15
+        h = 20
+        self.width = w * 16
+        self.configure(width=self.width + 50)
+        self.create_text(25, 12, text=label, fill="white", anchor="e", font=("Arial", 8))
+        start_x = 30
+        for i in range(16):
+            x = start_x + i * w
+            val = self.steps[i]
+            if val >= len(self.colors): val = 0
+            r = self.create_rectangle(x, 2, x + w - 1, 2 + h, fill=self.colors[val], outline="black")
+            self.rects.append(r)
+            if i % 4 == 0: self.create_line(x, 0, x, 25, fill="#777")
+
+    def on_click(self, event):
+        x = event.x - 30
+        if x < 0: return
+        idx = x // 15
+        if 0 <= idx < 16:
+            current = self.steps[idx]
+            nxt = (current + 1) % len(self.colors)
+            self.steps[idx] = nxt
+            self.update_ui()
+    def update_ui(self):
+        for i, r in enumerate(self.rects):
+            val = self.steps[i]
+            if val >= len(self.colors): val = 0
+            self.itemconfigure(r, fill=self.colors[val])
+
+class VideoProcessor(threading.Thread):
+    def __init__(self, mixer):
+        super().__init__(daemon=True)
+        self.mixer = mixer
+        self.running = False
+        self.frame_queue = queue.Queue(maxsize=2)
+        self.start_time = 0
+        self.lock = threading.Lock()
+    
+    def run(self):
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            k.SetThreadPriority(k.GetCurrentThread(), 15)
+            k.SetPriorityClass(k.GetCurrentProcess(), 0x80)
+        except: pass
+        last = time.perf_counter()
+        
+        while self.running:
+            if not self.mixer.playing or not self.mixer.sync_ready:
+                time.sleep(0.001)
+                last = time.perf_counter()
+                continue
+            now = time.perf_counter()
+            dt = now - last
+            last = now
+            with self.lock: st = self.start_time
+            if st <= 0:
+                time.sleep(0.001)
+                continue
+            
+            # Use offset from GUI (convert ms to seconds)
+            offset_sec = self.mixer.latency_ms.get() / 1000.0
+            
+            # --- TIGHT SYNC CORE ---
+            # Visuals run on (now - start_time - offset)
+            # This allows shifting the visual clock backwards or forwards relative to audio
+            effective_time = (now - st) - offset_sec
+            if effective_time < 0: effective_time = 0
+            
+            total_beats = effective_time * self.mixer.bpm / 60.0
+            
+            if self.mixer.global_loop_enabled:
+                loop_len_bars = self.mixer.global_loop_end - self.mixer.global_loop_start
+                if loop_len_bars <= 0: loop_len_bars = 4
+                loop_len_beats = loop_len_bars * self.mixer.beats_per_bar
+                start_beats = self.mixer.global_loop_start * self.mixer.beats_per_bar
+                loop_duration_ms = (loop_len_bars * self.mixer.beats_per_bar * 60.0 / self.mixer.bpm) * 1000.0
+                
+                # AUDIO SYNC MODE
+                if self.mixer.audio_track.enabled and self.mixer.audio_track.is_active():
+                    audio_pos_ms = self.mixer.audio_track.get_time_ms()
+                    
+                    # Logic 1: Loop Detect
+                    # Note: MCI stops if it hits end of file
+                    audio_stopped = not self.mixer.audio_track.engine.is_playing()
+                    audio_ended = (audio_stopped and audio_pos_ms >= (self.mixer.audio_track.engine.duration_ms - 100))
+                    audio_past_loop = (audio_pos_ms >= loop_duration_ms)
+                    
+                    if audio_ended or audio_past_loop:
+                        self.mixer.trigger_audio_loop()
+                        total_beats = start_beats 
+                        # Reset start_time to now (plus offset) so visuals snap back
+                        with self.lock: self.start_time = now - offset_sec
+                    else:
+                        # Follow audio directly
+                        rel_beats = (audio_pos_ms / 1000.0) * (self.mixer.bpm / 60.0)
+                        total_beats = start_beats + rel_beats
+                
+                # CLOCK SYNC MODE
+                else:
+                    rel_beat = total_beats % loop_len_beats
+                    if rel_beat < 0.1 and not self.mixer.loop_trigger_flag:
+                        self.mixer.loop_trigger_flag = True
+                        if self.mixer.audio_track.enabled:
+                            self.mixer.trigger_audio_loop()
+                    elif rel_beat > 0.5:
+                        self.mixer.loop_trigger_flag = False
+                    total_beats = start_beats + rel_beat
+
+            bp = total_beats
+            
+            # Metronome needs raw time, but we feed it the corrected time
+            self.mixer.metronome.check_tick(bp)
+            
+            fa, oa, fb, ob = None, 1.0, None, 1.0
+            if self.mixer.channel_a.cap:
+                r = self.mixer.channel_a.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar)
+                if r: fa, oa = r
+            if self.mixer.channel_b.cap:
+                r = self.mixer.channel_b.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar)
+                if r: fb, ob = r
+            if fa is not None or fb is not None:
+                blended = self.mixer.blend_frames(fa, oa, fb, ob, bp)
+                try:
+                    while not self.frame_queue.empty(): self.frame_queue.get_nowait()
+                    self.frame_queue.put_nowait((blended, bp))
+                except: pass
+            time.sleep(0.001)
+    
+    def start_proc(self, st):
+        with self.lock: self.start_time = st
+        if not self.is_alive():
+            self.running = True
+            self.start()
+    def stop_proc(self):
+        self.running = False
+        with self.lock: self.start_time = 0
+        while not self.frame_queue.empty():
+            try: self.frame_queue.get_nowait()
+            except: break
+    def get_frame(self):
+        try: return self.frame_queue.get_nowait()
+        except: return None
+
+class VideoMixer:
+    BLEND_MODES = ["normal", "add", "multiply", "screen", "overlay", "difference",
+                   "exclusion", "hard_light", "soft_light", "color_dodge", "color_burn",
+                   "darken", "lighten", "linear_light", "pin_light", "vivid_light"]
+    
+    def __init__(self, root):
+        self.root = root
+        self.root.title("BPM Video Mixer v15 Fixed")
+        self.root.geometry("1400x950")
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x80)
+        except: pass
+        self.preview_width = 640
+        self.preview_height = 360
+        self.channel_a = VideoChannel(self.preview_width, self.preview_height)
+        self.channel_b = VideoChannel(self.preview_width, self.preview_height)
+        
+        self.audio_track = AudioChannel()
+        self.global_loop_enabled = False
+        self.global_loop_start = 0 
+        self.global_loop_end = 4 
+        self.loop_trigger_flag = False
+        
+        self.bpm = 120.0
+        self.beats_per_bar = 4
+        self.mix = 0.5
+        self.mix_mod = Modulator()
+        self.blend_mode = "normal"
+        self.playing = False
+        self.start_time = 0
+        self.beat_position = 0
+        self.last_update_time = time.perf_counter()
+        self.metronome = HighPrecisionMetronome()
+        self.sync_ready = False
+        self.processor = VideoProcessor(self)
+        self.blend_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.float32)
+        self.output_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
+        self.status = tk.StringVar(value="Ready")
+        self.setup_ui()
+        self.update_loop()
+        
+    def trigger_audio_loop(self):
+        if self.audio_track.enabled:
+            self.audio_track.engine.stop()
+            self.audio_track.play(0)
+
+    def reset_mod(self, c):
+        c['en'].set(False)
+        c['wv'].set("sine")
+        c['rt'].set("1")
+        c['dp'].set(1.0)
+        if 'pos' in c: c['pos'].set(False)
+        if 'neg' in c: c['neg'].set(False)
+        c['inv'].set(False)
+
+    def reset_all(self):
+        for ch, c in [(self.channel_a, self.ch_a), (self.channel_b, self.ch_b)]:
+            ch.reset_controls()
+            c['br_v'].set(0)
+            c['co_v'].set(1)
+            c['sa_v'].set(1)
+            c['op_v'].set(1)
+            c['sp_v'].set("1")
+            c['loop'].set(True)
+            c['rev'].set(False)
+            c['glitch'].set(0.0)
+            c['bl_en'].set(False)
+            c['bl_len_var'].set("1 bar")
+            c['bl_start'].set(0)
+            c['strobe_en'].set(False)
+            c['strobe_rt'].set("1/8")
+            c['post_rt'].set("Off")
+            c['mirror_mode'].set("Off")
+            c['mosh'].set(0.0)
+            if ch.frame_count > 0:
+                c['bl_lbl'].config(text=f"0/{ch.frame_count}")
+            for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
+                self.reset_mod(c[f'{k}_m'])
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod']:
+                self.reset_mod(c[k])
+            c['seq_gate_w'].update_ui()
+            c['seq_stutter_w'].update_ui()
+            c['seq_speed_w'].update_ui()
+            c['seq_jump_w'].update_ui()
+        self.mix_var.set(0.5)
+        self.mix = 0.5
+        self.mix_mod.reset()
+        self.reset_mod(self.mix_mod_c)
+        self.blend_var.set("normal")
+        self.blend_mode = "normal"
+        self.mbright.set(0)
+        self.mcontr.set(1)
+        self.metro_var.set(False)
+        self.metronome.enabled = False
+        self.mvol.set(0.5)
+        self.bpb_var.set(4)
+        self.beats_per_bar = 4
+        self.gloop_en.set(True)
+        self.global_loop_enabled = True
+        self.gloop_start.set(0)
+        self.global_loop_start = 0
+        self.gloop_end.set(4)
+        self.global_loop_end = 4
+        self.audio_en.set(True)
+        self.audio_track.enabled = True
+        self.latency_ms.set(0.0)
+        self.status.set("Reset")
+
+    def setup_ui(self):
+        main = ttk.Frame(self.root, padding="5")
+        main.pack(fill=tk.BOTH, expand=True)
+        top = ttk.Frame(main)
+        top.pack(fill=tk.X, pady=(0, 5))
+        pf = ttk.LabelFrame(top, text="Preview", padding="5")
+        pf.pack(side=tk.LEFT, padx=(0, 10))
+        self.preview_canvas = tk.Canvas(pf, width=self.preview_width, height=self.preview_height, bg="black")
+        self.preview_canvas.pack()
+        tf = ttk.LabelFrame(top, text="Transport", padding="5")
+        tf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Row 1
+        row1 = ttk.Frame(tf)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="BPM:", font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+        self.bpm_var = tk.DoubleVar(value=120.0)
+        bpm_spin = ttk.Spinbox(row1, from_=20, to=300, textvariable=self.bpm_var, width=7, command=self.on_bpm)
+        bpm_spin.pack(side=tk.LEFT, padx=3)
+        bpm_spin.bind("<Return>", lambda e: self.on_bpm())
+        self.tap_times = []
+        ttk.Button(row1, text="Tap", command=self.tap_tempo, width=4).pack(side=tk.LEFT, padx=3)
+        self.beat_var = tk.StringVar(value="Beat: 0.0")
+        ttk.Label(row1, textvariable=self.beat_var, font=("Consolas", 10)).pack(side=tk.LEFT, padx=10)
+        self.beat_flash = tk.Canvas(row1, width=25, height=25, bg="gray", highlightthickness=1)
+        self.beat_flash.pack(side=tk.LEFT, padx=3)
+        self.sync_var = tk.StringVar(value="")
+        ttk.Label(row1, textvariable=self.sync_var, foreground="green").pack(side=tk.LEFT, padx=5)
+        self.fps_var = tk.StringVar(value="")
+        ttk.Label(row1, textvariable=self.fps_var, font=("Consolas", 9)).pack(side=tk.RIGHT)
+        
+        # Row 2
+        row2 = ttk.Frame(tf)
+        row2.pack(fill=tk.X, pady=2)
+        self.metro_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row2, text="Metro", variable=self.metro_var, command=lambda: setattr(self.metronome, 'enabled', self.metro_var.get())).pack(side=tk.LEFT)
+        ttk.Label(row2, text="Vol:").pack(side=tk.LEFT, padx=(5, 2))
+        self.mvol = tk.DoubleVar(value=0.5)
+        ttk.Scale(row2, from_=0, to=1, variable=self.mvol, command=lambda v: self.metronome.update_volume(float(v)), length=50).pack(side=tk.LEFT)
+        
+        ttk.Label(row2, text=" | Loop Bars:").pack(side=tk.LEFT, padx=5)
+        self.gloop_en = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, variable=self.gloop_en, command=lambda: setattr(self, 'global_loop_enabled', self.gloop_en.get())).pack(side=tk.LEFT)
+        self.gloop_start = tk.IntVar(value=0)
+        ttk.Spinbox(row2, from_=0, to=100, textvariable=self.gloop_start, width=3, command=lambda: setattr(self, 'global_loop_start', self.gloop_start.get())).pack(side=tk.LEFT)
+        ttk.Label(row2, text="to").pack(side=tk.LEFT)
+        self.gloop_end = tk.IntVar(value=4)
+        ttk.Spinbox(row2, from_=1, to=100, textvariable=self.gloop_end, width=3, command=lambda: setattr(self, 'global_loop_end', self.gloop_end.get())).pack(side=tk.LEFT)
+        
+        ttk.Label(row2, text=" | Audio:").pack(side=tk.LEFT, padx=5)
+        self.audio_en = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, variable=self.audio_en, command=lambda: setattr(self.audio_track, 'enabled', self.audio_en.get())).pack(side=tk.LEFT)
+        ttk.Button(row2, text="Load", command=self.load_audio, width=5).pack(side=tk.LEFT)
+        self.audio_status = tk.StringVar(value="None")
+        ttk.Label(row2, textvariable=self.audio_status, width=10).pack(side=tk.LEFT, padx=2)
+        
+        # Row 3
+        row3 = ttk.Frame(tf)
+        row3.pack(fill=tk.X, pady=5)
+        self.play_btn = tk.Button(row3, text="Play", command=self.toggle_play, font=("Arial", 11), width=8)
+        self.play_btn.pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Stop", command=self.stop, font=("Arial", 11), width=8).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Rew", command=self.rewind, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Reset", command=self.reset_all, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(row3, text="Offset (ms):").pack(side=tk.LEFT, padx=(10, 5))
+        self.latency_ms = tk.DoubleVar(value=0.0)
+        ttk.Scale(row3, from_=-200, to=200, variable=self.latency_ms, length=100).pack(side=tk.LEFT)
+        
+        # Row 4
+        row4 = ttk.Frame(tf)
+        row4.pack(fill=tk.X, pady=2)
+        ttk.Label(row4, text="A", font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+        self.mix_var = tk.DoubleVar(value=0.5)
+        ttk.Scale(row4, from_=0, to=1, variable=self.mix_var, command=lambda v: setattr(self, 'mix', float(v)), length=150).pack(side=tk.LEFT, padx=3)
+        ttk.Label(row4, text="B", font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+        self.mix_mod_c = self.setup_mod(row4, self.mix_mod, "Mix")
+        
+        # Row 5
+        row5 = ttk.Frame(tf)
+        row5.pack(fill=tk.X, pady=2)
+        ttk.Label(row5, text="Blend:").pack(side=tk.LEFT)
+        self.blend_var = tk.StringVar(value="normal")
+        blend_combo = ttk.Combobox(row5, textvariable=self.blend_var, values=self.BLEND_MODES, state="readonly", width=12)
+        blend_combo.pack(side=tk.LEFT, padx=3)
+        blend_combo.bind("<<ComboboxSelected>>", lambda e: setattr(self, 'blend_mode', self.blend_var.get()))
+        ttk.Label(row5, text="Bright:").pack(side=tk.LEFT, padx=(10, 2))
+        self.mbright = tk.DoubleVar(value=0.0)
+        ttk.Scale(row5, from_=-1, to=1, variable=self.mbright, length=60).pack(side=tk.LEFT)
+        ttk.Label(row5, text="Contr:").pack(side=tk.LEFT, padx=(5, 2))
+        self.mcontr = tk.DoubleVar(value=1.0)
+        ttk.Scale(row5, from_=0, to=2, variable=self.mcontr, length=60).pack(side=tk.LEFT)
+        
+        # Row 6
+        row6 = ttk.Frame(tf)
+        row6.pack(fill=tk.X, pady=2)
+        ttk.Button(row6, text="Load Proj", command=self.load_project).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row6, text="Save Proj", command=self.save_project).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row6, text="Load Preset", command=self.load_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row6, text="Save Preset", command=self.save_preset).pack(side=tk.LEFT, padx=2)
+        tk.Button(row6, text="Export", command=self.export_video, font=("Arial", 10)).pack(side=tk.LEFT, padx=10)
+        
+        # Status Bar
+        self.status_bar = ttk.Label(main, textvariable=self.status, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(5,0))
+        
+        chf = ttk.Frame(main)
+        chf.pack(fill=tk.BOTH, expand=True)
+        self.ch_a = self.setup_channel(chf, self.channel_a, "Channel A")
+        self.ch_b = self.setup_channel(chf, self.channel_b, "Channel B")
+        
+    def on_bpm(self):
+        try:
+            self.bpm = float(self.bpm_var.get())
+            self.metronome.set_bpm(self.bpm)
+        except:
+            pass
+        
+    def tap_tempo(self):
+        now = time.perf_counter()
+        self.tap_times = [t for t in self.tap_times if now - t < 3] + [now]
+        if len(self.tap_times) >= 2:
+            avg = sum(self.tap_times[i] - self.tap_times[i-1] for i in range(1, len(self.tap_times))) / (len(self.tap_times) - 1)
+            self.bpm = max(20, min(300, 60 / avg))
+            self.bpm_var.set(round(self.bpm, 1))
+            self.metronome.set_bpm(self.bpm)
+        
+    def on_bpb(self):
+        try:
+            self.beats_per_bar = int(self.bpb_var.get())
+            self.metronome.set_beats_per_bar(self.beats_per_bar)
+        except:
+            pass
+    
+    def load_audio(self):
+        p = filedialog.askopenfilename(filetypes=[("Audio", "*.wav *.mp3 *.ogg")])
+        if p and self.audio_track.load(p):
+            self.audio_status.set(os.path.basename(p)[:10])
+            self.status.set(f"Audio Loaded: {os.path.basename(p)}")
+
+    def setup_channel(self, parent, ch, title):
+        c = {}
+        f = ttk.LabelFrame(parent, text=title, padding="2")
+        f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        nb = ttk.Notebook(f)
+        nb.pack(fill=tk.BOTH, expand=True)
+        tab_main = ttk.Frame(nb, padding=5)
+        tab_loop = ttk.Frame(nb, padding=5)
+        tab_fx = ttk.Frame(nb, padding=5)
+        tab_seq = ttk.Frame(nb, padding=5)
+        nb.add(tab_main, text="Main")
+        nb.add(tab_loop, text="Loop/Time")
+        nb.add(tab_fx, text="FX")
+        nb.add(tab_seq, text="Seq")
+        
+        row1 = ttk.Frame(tab_main)
+        row1.pack(fill=tk.X, pady=2)
+        # Fix: Helper method restored
+        ttk.Button(row1, text="Load", command=lambda: self.load_video_helper(ch, c)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="Rew", command=ch.reset_position).pack(side=tk.LEFT, padx=2)
+        c['file'] = tk.StringVar(value="No video")
+        ttk.Label(row1, textvariable=c['file']).pack(side=tk.LEFT, padx=5)
+        c['info'] = tk.StringVar(value="")
+        ttk.Label(tab_main, textvariable=c['info'], font=("Consolas", 8)).pack(anchor=tk.W)
+        for k, l, d, mn, mx, a in [('br', 'Bright', 0, -1, 1, 'brightness'), ('co', 'Contr', 1, 0, 2, 'contrast'), 
+                                    ('sa', 'Satur', 1, 0, 2, 'saturation'), ('op', 'Opac', 1, 0, 1, 'opacity')]:
+            row = ttk.Frame(tab_main)
+            row.pack(fill=tk.X, pady=1)
+            ttk.Label(row, text=f"{l}:", width=6).pack(side=tk.LEFT)
+            c[f'{k}_v'] = tk.DoubleVar(value=d)
+            ttk.Scale(row, from_=mn, to=mx, variable=c[f'{k}_v'], length=70, command=lambda v, a=a, ch=ch: setattr(ch, a, float(v))).pack(side=tk.LEFT)
+            c[f'{k}_m'] = self.setup_mod(row, getattr(ch, f'{a}_mod'), "M")
+            
+        srow = ttk.Frame(tab_loop)
+        srow.pack(fill=tk.X, pady=5)
+        ttk.Label(srow, text="Speed:", width=6).pack(side=tk.LEFT)
+        c['sp_v'] = tk.StringVar(value="1")
+        speed_combo = ttk.Combobox(srow, textvariable=c['sp_v'], values=VideoChannel.SPEED_LABELS, state="readonly", width=5)
+        speed_combo.pack(side=tk.LEFT, padx=2)
+        speed_combo.bind("<<ComboboxSelected>>", lambda e, ch=ch: self.on_speed_change(e, ch))
+        c['loop'] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(srow, text="Loop", variable=c['loop'], command=lambda: setattr(ch, 'loop', c['loop'].get())).pack(side=tk.LEFT, padx=3)
+        c['rev'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(srow, text="Rev", variable=c['rev'], command=lambda: setattr(ch, 'reverse', c['rev'].get())).pack(side=tk.LEFT, padx=3)
+        lf = ttk.LabelFrame(tab_loop, text="Beat Loop", padding="3")
+        lf.pack(fill=tk.X, pady=5)
+        lrow = ttk.Frame(lf)
+        lrow.pack(fill=tk.X)
+        c['bl_en'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(lrow, text="On", variable=c['bl_en'], command=lambda: setattr(ch, 'beat_loop_enabled', c['bl_en'].get())).pack(side=tk.LEFT)
+        ttk.Label(lrow, text="Len:").pack(side=tk.LEFT, padx=5)
+        c['bl_len_var'] = tk.StringVar(value="1 bar")
+        bl_combo = ttk.Combobox(lrow, textvariable=c['bl_len_var'], values=VideoChannel.LOOP_LENGTH_LABELS, state="readonly", width=8)
+        bl_combo.pack(side=tk.LEFT)
+        bl_combo.bind("<<ComboboxSelected>>", lambda e, ch=ch: self.on_loop_len_change(e, ch))
+        lrow2 = ttk.Frame(lf)
+        lrow2.pack(fill=tk.X, pady=2)
+        ttk.Label(lrow2, text="Start:").pack(side=tk.LEFT)
+        c['bl_start'] = tk.IntVar(value=0)
+        c['bl_slider'] = ttk.Scale(lrow2, from_=0, to=100, variable=c['bl_start'], length=120, command=lambda v, ch=ch, c=c: self.on_ls(ch, c))
+        c['bl_slider'].pack(side=tk.LEFT)
+        c['bl_lbl'] = ttk.Label(lrow2, text="0/0", width=8)
+        c['bl_lbl'].pack(side=tk.LEFT)
+        lrow3 = ttk.Frame(lf)
+        lrow3.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(lrow3, text="Mod:", font=("Arial", 8)).pack(side=tk.LEFT)
+        c['loop_start_mod'] = self.setup_mod_simple(lrow3, ch.loop_start_mod, "On")
+
+        fr_str = ttk.Frame(tab_fx)
+        fr_str.pack(fill=tk.X, pady=2)
+        c['strobe_en'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fr_str, text="Strobe", variable=c['strobe_en'], command=lambda: setattr(ch, 'strobe_enabled', c['strobe_en'].get())).pack(side=tk.LEFT)
+        c['strobe_rt'] = tk.StringVar(value="1/8")
+        sc = ttk.Combobox(fr_str, textvariable=c['strobe_rt'], values=list(VideoChannel.STROBE_RATES.keys()), state="readonly", width=4)
+        sc.pack(side=tk.LEFT, padx=5)
+        sc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['strobe_rt']: setattr(ch, 'strobe_rate', VideoChannel.STROBE_RATES.get(v.get(), 0.125)))
+        c['strobe_col'] = tk.StringVar(value="white")
+        scc = ttk.Combobox(fr_str, textvariable=c['strobe_col'], values=["white", "black"], state="readonly", width=5)
+        scc.pack(side=tk.LEFT)
+        scc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['strobe_col']: setattr(ch, 'strobe_color', v.get()))
+        fr_mir = ttk.Frame(tab_fx)
+        fr_mir.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_mir, text="Mirror:").pack(side=tk.LEFT)
+        c['mirror_mode'] = tk.StringVar(value="Off")
+        mc = ttk.Combobox(fr_mir, textvariable=c['mirror_mode'], values=VideoChannel.MIRROR_MODES, state="readonly", width=9)
+        mc.pack(side=tk.LEFT, padx=5)
+        mc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['mirror_mode']: setattr(ch, 'mirror_mode', v.get()))
+        fr_mosh = ttk.Frame(tab_fx)
+        fr_mosh.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_mosh, text="Mosh:").pack(side=tk.LEFT)
+        c['mosh'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_mosh, from_=0.0, to=1.0, variable=c['mosh'], length=80, command=lambda v, ch=ch: setattr(ch, 'mosh_amount', float(v))).pack(side=tk.LEFT)
+        fr_post = ttk.Frame(tab_fx)
+        fr_post.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_post, text="Postrz:").pack(side=tk.LEFT)
+        c['post_rt'] = tk.StringVar(value="Off")
+        pc = ttk.Combobox(fr_post, textvariable=c['post_rt'], values=list(VideoChannel.POSTERIZE_RATES.keys()), state="readonly", width=5)
+        pc.pack(side=tk.LEFT, padx=5)
+        pc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['post_rt']: setattr(ch, 'posterize_rate', VideoChannel.POSTERIZE_RATES.get(v.get(), 0.0)))
+        fr_gli = ttk.Frame(tab_fx)
+        fr_gli.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_gli, text="Glitch:").pack(side=tk.LEFT)
+        c['glitch'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_gli, from_=0.0, to=1.0, variable=c['glitch'], length=80, command=lambda v, ch=ch: setattr(ch, 'glitch_rate', float(v))).pack(side=tk.LEFT)
+        fr_rgb = ttk.Frame(tab_fx)
+        fr_rgb.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_rgb, text="RGB LFO:").pack(side=tk.LEFT)
+        c['rgb_mod'] = self.setup_mod(fr_rgb, ch.rgb_mod, "On")
+        fr_blur = ttk.Frame(tab_fx)
+        fr_blur.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_blur, text="Blur LFO:").pack(side=tk.LEFT)
+        c['blur_mod'] = self.setup_mod(fr_blur, ch.blur_mod, "On")
+        fr_zoom = ttk.Frame(tab_fx)
+        fr_zoom.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_zoom, text="Zoom LFO:").pack(side=tk.LEFT)
+        c['zoom_mod'] = self.setup_mod(fr_zoom, ch.zoom_mod, "On")
+        fr_pix = ttk.Frame(tab_fx)
+        fr_pix.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_pix, text="Pixel LFO:").pack(side=tk.LEFT)
+        c['pixel_mod'] = self.setup_mod(fr_pix, ch.pixel_mod, "On")
+
+        c['seq_gate_w'] = SequencerWidget(tab_seq, ch, 'seq_gate', "Gate", "toggle")
+        c['seq_gate_w'].pack(pady=5)
+        c['seq_stutter_w'] = SequencerWidget(tab_seq, ch, 'seq_stutter', "Stutter", "toggle")
+        c['seq_stutter_w'].pack(pady=5)
+        c['seq_speed_w'] = SequencerWidget(tab_seq, ch, 'seq_speed', "Speed (G=1x,Y=2x,B=.5,R=Rev)", "multi_speed")
+        c['seq_speed_w'].pack(pady=5)
+        c['seq_jump_w'] = SequencerWidget(tab_seq, ch, 'seq_jump', "Jump (Y=-1bt, R=-1bar)", "multi_jump")
+        c['seq_jump_w'].pack(pady=5)
+        return c
+    
+    def setup_mod_simple(self, parent, mod, label):
+        c = {}
+        mf = ttk.Frame(parent)
+        mf.pack(side=tk.LEFT, padx=2)
+        c['en'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text=label, variable=c['en'], command=lambda: setattr(mod, 'enabled', c['en'].get())).pack(side=tk.LEFT)
+        c['wv'] = tk.StringVar(value="sine")
+        wc = ttk.Combobox(mf, textvariable=c['wv'], values=Modulator.WAVE_TYPES, state="readonly", width=5)
+        wc.pack(side=tk.LEFT)
+        mod.wave_type = c['wv'].get()
+        wc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'wave_type', c['wv'].get()))
+        c['rt'] = tk.StringVar(value="1")
+        rc = ttk.Combobox(mf, textvariable=c['rt'], values=list(Modulator.RATE_OPTIONS.keys()), state="readonly", width=4)
+        rc.pack(side=tk.LEFT)
+        rc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'rate', Modulator.RATE_OPTIONS.get(c['rt'].get(), 1.0)))
+        c['dp'] = tk.DoubleVar(value=1.0)
+        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=30, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        c['inv'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text="inv", variable=c['inv'], command=lambda: setattr(mod, 'invert', c['inv'].get())).pack(side=tk.LEFT)
+        return c
+        
+    def setup_mod(self, parent, mod, label):
+        c = {}
+        mf = ttk.Frame(parent)
+        mf.pack(side=tk.LEFT, padx=2)
+        c['en'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text=label, variable=c['en'], command=lambda: setattr(mod, 'enabled', c['en'].get())).pack(side=tk.LEFT)
+        c['wv'] = tk.StringVar(value="sine")
+        wc = ttk.Combobox(mf, textvariable=c['wv'], values=Modulator.WAVE_TYPES, state="readonly", width=4)
+        wc.pack(side=tk.LEFT)
+        mod.wave_type = c['wv'].get()
+        wc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'wave_type', c['wv'].get()))
+        c['rt'] = tk.StringVar(value="1")
+        rc = ttk.Combobox(mf, textvariable=c['rt'], values=list(Modulator.RATE_OPTIONS.keys()), state="readonly", width=4)
+        rc.pack(side=tk.LEFT)
+        rc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'rate', Modulator.RATE_OPTIONS.get(c['rt'].get(), 1.0)))
+        c['dp'] = tk.DoubleVar(value=1.0)
+        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=30, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        c['pos'] = tk.BooleanVar(value=False)
+        c['neg'] = tk.BooleanVar(value=False)
+        c['inv'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text="+", variable=c['pos'], command=lambda: self._set_pos_neg(mod, c, 'pos')).pack(side=tk.LEFT)
+        ttk.Checkbutton(mf, text="-", variable=c['neg'], command=lambda: self._set_pos_neg(mod, c, 'neg')).pack(side=tk.LEFT)
+        ttk.Checkbutton(mf, text="inv", variable=c['inv'], command=lambda: setattr(mod, 'invert', c['inv'].get())).pack(side=tk.LEFT)
+        return c
+    
+    def _set_pos_neg(self, mod, c, which):
+        if which == 'pos':
+            mod.pos_only = c['pos'].get()
+            if mod.pos_only:
+                mod.neg_only = False
+                c['neg'].set(False)
+        else:
+            mod.neg_only = c['neg'].get()
+            if mod.neg_only:
+                mod.pos_only = False
+                c['pos'].set(False)
+    
+    def on_ls(self, ch, c):
+        v = int(float(c['bl_start'].get()))
+        ch.loop_start_frame = v
+        c['bl_lbl'].config(text=f"{v}/{ch.frame_count}")
+    
+    def on_speed_change(self, event, ch):
+        val = event.widget.get()
+        if val in VideoChannel.SPEED_OPTIONS:
+            with ch.lock:
+                ch.speed = float(VideoChannel.SPEED_OPTIONS[val])
+        self.root.focus_set()
+                
+    def on_loop_len_change(self, event, ch):
+        val = event.widget.get()
+        if val in VideoChannel.LOOP_LENGTH_OPTIONS:
+            with ch.lock:
+                ch.loop_length_beats = float(VideoChannel.LOOP_LENGTH_OPTIONS[val])
+        self.root.focus_set()
+        
+    def load_video_helper(self, ch, c):
+        p = filedialog.askopenfilename(filetypes=[("Video", "*.mp4 *.avi *.mov *.mkv *.webm")])
+        if p and ch.load_video(p):
+            c['file'].set(os.path.basename(p)[:30])
+            c['info'].set(f"{ch.fps:.0f}fps {ch.width}x{ch.height} {ch.frame_count}f")
+            c['bl_slider'].config(to=max(1, ch.frame_count - 1))
+            c['bl_start'].set(0)
+            c['bl_lbl'].config(text=f"0/{ch.frame_count}")
+            self.status.set(f"Loaded: {os.path.basename(p)}")
+    
+    def update_ch_ui(self, ch, c):
+        c['br_v'].set(ch.brightness)
+        c['co_v'].set(ch.contrast)
+        c['sa_v'].set(ch.saturation)
+        c['op_v'].set(ch.opacity)
+        for label, val in VideoChannel.SPEED_OPTIONS.items():
+            if abs(val - ch.speed) < 0.01:
+                c['sp_v'].set(label)
+                break
+        c['loop'].set(ch.loop)
+        c['rev'].set(ch.reverse)
+        c['glitch'].set(ch.glitch_rate)
+        c['strobe_en'].set(ch.strobe_enabled)
+        c['strobe_col'].set(ch.strobe_color)
+        for label, val in VideoChannel.STROBE_RATES.items():
+            if abs(val - ch.strobe_rate) < 0.001:
+                c['strobe_rt'].set(label)
+                break
+        for label, val in VideoChannel.POSTERIZE_RATES.items():
+            if abs(val - ch.posterize_rate) < 0.001:
+                c['post_rt'].set(label)
+                break
+        c['mirror_mode'].set(ch.mirror_mode)
+        c['mosh'].set(ch.mosh_amount)
+        c['bl_en'].set(ch.beat_loop_enabled)
+        for label, val in VideoChannel.LOOP_LENGTH_OPTIONS.items():
+             if abs(val - ch.loop_length_beats) < 0.001:
+                 c['bl_len_var'].set(label)
+                 break
+        c['bl_start'].set(ch.loop_start_frame)
+        if ch.frame_count > 0:
+            c['bl_slider'].config(to=max(1, ch.frame_count - 1))
+            c['bl_lbl'].config(text=f"{ch.loop_start_frame}/{ch.frame_count}")
+        for k, m in [('br', ch.brightness_mod), ('co', ch.contrast_mod), ('sa', ch.saturation_mod), ('op', ch.opacity_mod)]:
+            mc = c[f'{k}_m']
+            mc['en'].set(m.enabled)
+            mc['wv'].set(m.wave_type)
+            mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
+            mc['dp'].set(m.depth)
+            mc['pos'].set(m.pos_only)
+            mc['neg'].set(m.neg_only)
+            mc['inv'].set(m.invert)
+        for m, k in [(ch.loop_start_mod, 'loop_start_mod'), (ch.rgb_mod, 'rgb_mod'), 
+                     (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod')]:
+            mc = c[k]
+            mc['en'].set(m.enabled)
+            mc['wv'].set(m.wave_type)
+            mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
+            mc['dp'].set(m.depth)
+            mc['inv'].set(m.invert)
+        c['seq_gate_w'].update_ui()
+        c['seq_stutter_w'].update_ui()
+        c['seq_speed_w'].update_ui()
+        c['seq_jump_w'].update_ui()
+        if ch.video_path:
+            c['file'].set(os.path.basename(ch.video_path)[:30])
+            c['info'].set(f"{ch.fps:.0f}fps {ch.width}x{ch.height} {ch.frame_count}f")
+    
+    def update_mod_ui(self, c, m):
+        c['en'].set(m.enabled)
+        c['wv'].set(m.wave_type)
+        c['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
+        c['dp'].set(m.depth)
+        if 'pos' in c:
+            c['pos'].set(m.pos_only)
+        if 'neg' in c:
+            c['neg'].set(m.neg_only)
+        c['inv'].set(m.invert)
+    
+    def apply_blend_mode(self, a, b, mode, mix_a, mix_b):
+        if mode == "normal" or mode == "add":
+            return a * mix_a + b * mix_b
+        elif mode == "multiply":
+            combined = a * mix_a + b * mix_b
+            return combined * 4
+        elif mode == "screen":
+            combined = a * mix_a + b * mix_b
+            return 1 - (1 - combined) * (1 - combined)
+        elif mode == "overlay":
+            combined = a * mix_a + b * mix_b
+            return np.where(combined < 0.5, 2 * combined * combined, 1 - 2 * (1 - combined) * (1 - combined))
+        elif mode == "difference":
+            return np.abs(a * mix_a - b * mix_b)
+        elif mode == "exclusion":
+            combined = a * mix_a + b * mix_b
+            return combined - 2 * (a * mix_a) * (b * mix_b)
+        elif mode == "hard_light":
+            combined = a * mix_a + b * mix_b
+            return np.where(combined < 0.5, 2 * combined * combined, 1 - 2 * (1 - combined) * (1 - combined))
+        elif mode == "soft_light":
+            combined = a * mix_a + b * mix_b
+            return (1 - 2 * combined) * combined * combined + 2 * combined * combined
+        elif mode == "color_dodge":
+            combined = a * mix_a + b * mix_b
+            return np.minimum(1, combined / (1 - combined + 0.001))
+        elif mode == "color_burn":
+            combined = a * mix_a + b * mix_b
+            return 1 - np.minimum(1, (1 - combined) / (combined + 0.001))
+        elif mode == "darken":
+            return np.minimum(a * mix_a, b * mix_b)
+        elif mode == "lighten":
+            return np.maximum(a * mix_a, b * mix_b)
+        elif mode == "linear_light":
+            combined = a * mix_a + b * mix_b
+            return np.clip(combined * 2 - 0.5, 0, 1)
+        elif mode == "pin_light":
+            am, bm = a * mix_a, b * mix_b
+            return np.where(bm < 0.5, np.minimum(am, 2 * bm), np.maximum(am, 2 * bm - 1))
+        elif mode == "vivid_light":
+            combined = a * mix_a + b * mix_b
+            return np.where(combined < 0.5, 1 - (1 - combined) / (2 * combined + 0.001), combined / (2 * (1 - combined) + 0.001))
+        else:
+            return a * mix_a + b * mix_b
+    
+    def blend_frames(self, fa, oa, fb, ob, bp):
+        mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp) * 0.5))
+        if fa is None:
+            fa = np.zeros_like(self.blend_buffer)
+            oa = 1.0
+        if fb is None:
+            fb = np.zeros_like(self.blend_buffer)
+            ob = 1.0
+        mix_a = oa * (1.0 - mix)
+        mix_b = ob * mix
+        self.blend_buffer[:] = self.apply_blend_mode(fa, fb, self.blend_mode, mix_a, mix_b)
+        mb = self.mbright.get()
+        mc = self.mcontr.get()
+        if mb != 0 or mc != 1.0:
+            self.blend_buffer += mb
+            self.blend_buffer -= 0.5
+            self.blend_buffer *= mc
+            self.blend_buffer += 0.5
+        np.clip(self.blend_buffer, 0, 1, out=self.blend_buffer)
+        np.multiply(self.blend_buffer, 255, out=self.blend_buffer)
+        self.output_buffer[:] = self.blend_buffer.astype(np.uint8)
+        return self.output_buffer
+    
+    def sync_start(self):
+        self.sync_var.set("Syncing...")
+        self.root.update()
+        self.metronome.set_bpm(self.bpm)
+        self.metronome.set_beats_per_bar(self.beats_per_bar)
+        self.metronome.prepare_start()
+        self.channel_a.reset_position()
+        self.channel_b.reset_position()
+        self.audio_track.stop()
+        self.loop_trigger_flag = False
+        
+        audio_started = False
+        if self.audio_track.enabled and self.audio_track.path:
+            self.audio_track.play(0)
+            for _ in range(20):
+                time.sleep(0.01)
+                if self.audio_track.is_active():
+                    audio_started = True
+                    break
+        
+        self.start_time = time.perf_counter()
+        self.last_update_time = self.start_time
+        self.beat_position = 0
+        
+        self.metronome.synchronized_start(self.start_time)
+        self.processor.start_proc(self.start_time)
+        self.sync_ready = True
+        self.sync_var.set("SYNC")
+        
+    def toggle_play(self):
+        if self.playing:
+            self.playing = False
+            self.metronome.stop()
+            self.processor.stop_proc()
+            self.audio_track.stop()
+            self.play_btn.config(text="Play")
+            self.sync_var.set("")
+            self.sync_ready = False
+        else:
+            self.playing = True
+            self.play_btn.config(text="Pause")
+            if not self.processor.is_alive():
+                self.processor = VideoProcessor(self)
+            self.sync_start()
+            
+    def stop(self):
+        self.playing = False
+        self.metronome.stop()
+        self.processor.stop_proc()
+        self.audio_track.stop()
+        self.play_btn.config(text="Play")
+        self.sync_var.set("")
+        self.sync_ready = False
+        
+    def rewind(self):
+        was = self.playing
+        if was:
+            self.metronome.stop()
+            self.processor.stop_proc()
+            self.audio_track.stop()
+        self.beat_position = 0
+        self.channel_a.reset_position()
+        self.channel_b.reset_position()
+        if was:
+            if not self.processor.is_alive():
+                self.processor = VideoProcessor(self)
+            self.sync_start()
+    
+    def update_loop(self):
+        fd = self.processor.get_frame()
+        if fd:
+            blended, bp = fd
+            self.beat_position = bp
+            self.beat_var.set(f"Beat: {bp:.1f}")
+            self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
+            rgb = blended[:, :, ::-1]
+            img = Image.fromarray(rgb)
+            self.preview_photo = ImageTk.PhotoImage(img)
+            self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
+        now = time.perf_counter()
+        dt = now - self.last_update_time
+        if dt > 0:
+            self.fps_var.set(f"FPS:{1/dt:.0f}")
+        self.last_update_time = now
+        self.root.after(8, self.update_loop)
+        
+    def export_video(self):
+        if not self.channel_a.cap and not self.channel_b.cap:
+            messagebox.showerror("Error", "Load a video first")
+            return
+        dlg = ExportDialog(self.root, self.bpm, self.beats_per_bar)
+        if not dlg.result:
+            return
+        fmt = dlg.result.get('format', 'avi')
+        ext = '.mov' if fmt == 'mov' else '.mp4' if fmt == 'mp4' else '.avi'
+        p = filedialog.asksaveasfilename(defaultextension=ext, filetypes=[("MOV", "*.mov"), ("MP4", "*.mp4"), ("AVI", "*.avi")])
+        if not p:
+            return
+        self.status.set("Exporting...")
+        threading.Thread(target=self.do_export, args=(p, dlg.result), daemon=True).start()
+
+    def do_export(self, path, s):
+        try:
+            bars, fps, w, h = s['bars'], s['fps'], s['width'], s['height']
+            fmt = s.get('format', 'avi')
+            self.channel_a.set_target_size(w, h)
+            self.channel_b.set_target_size(w, h)
+            
+            dur = bars * self.beats_per_bar * 60 / self.bpm
+            tot = int(dur * fps)
+            ext = os.path.splitext(path)[1].lower()
+            if ext == '.avi' or fmt == 'avi':
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                path = os.path.splitext(path)[0] + '.avi'
+            elif ext == '.mov' or fmt == 'mov':
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                path = os.path.splitext(path)[0] + '.mov'
+            else:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                path = os.path.splitext(path)[0] + '.mp4'
+            out = cv2.VideoWriter(path, fourcc, fps, (w, h))
+            if not out.isOpened():
+                raise Exception("Failed to create video writer")
+            self.channel_a.reset_position()
+            self.channel_b.reset_position()
+            ft = 1 / fps
+            
+            for i in range(tot):
+                bp = (i / fps) * self.bpm / 60
+                fa, oa, fb, ob = None, 1.0, None, 1.0
+                
+                r = self.channel_a.get_frame(bp, ft, self.bpm, self.beats_per_bar)
+                if r:
+                    fa, oa = r
+                r = self.channel_b.get_frame(bp, ft, self.bpm, self.beats_per_bar)
+                if r:
+                    fb, ob = r
+                
+                mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp) * 0.5))
+                
+                if fa is None:
+                    fa = np.zeros((h, w, 3), dtype=np.float32)
+                    oa = 1.0
+                if fb is None:
+                    fb = np.zeros((h, w, 3), dtype=np.float32)
+                    ob = 1.0
+                
+                mix_a = oa * (1.0 - mix)
+                mix_b = ob * mix
+                
+                blended = self.apply_blend_mode(fa, fb, self.blend_mode, mix_a, mix_b)
+                
+                mb = self.mbright.get()
+                mc = self.mcontr.get()
+                if mb != 0 or mc != 1.0:
+                    blended = blended + mb
+                    blended = (blended - 0.5) * mc + 0.5
+                
+                frame_out = (np.clip(blended, 0, 1) * 255).astype(np.uint8)
+                out.write(frame_out)
+                
+                if i % 30 == 0:
+                    pct = i / tot * 100
+                    self.root.after(0, lambda p=pct: self.status.set(f"Export: {p:.0f}%"))
+            
+            out.release()
+            self.channel_a.set_target_size(self.preview_width, self.preview_height)
+            self.channel_b.set_target_size(self.preview_width, self.preview_height)
+            self.root.after(0, lambda: self.status.set(f"Done: {os.path.basename(path)}"))
+            self.root.after(0, lambda: messagebox.showinfo("Done", f"Exported {path}\n{dur:.1f}s"))
+        except Exception as e:
+            self.channel_a.set_target_size(self.preview_width, self.preview_height)
+            self.channel_b.set_target_size(self.preview_width, self.preview_height)
+            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            
+    def save_preset(self):
+        p = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+        if not p:
+            return
+        d = {'bpm': self.bpm, 'bpb': self.beats_per_bar, 'mix': self.mix, 'blend': self.blend_mode,
+             'mbright': self.mbright.get(), 'mcontr': self.mcontr.get(), 'mix_mod': self.mix_mod.to_dict(),
+             'ch_a': self.channel_a.to_dict(), 'ch_b': self.channel_b.to_dict()}
+        with open(p, 'w') as f:
+            json.dump(d, f, indent=2)
+        self.status.set(f"Saved preset")
+    
+    def load_preset(self):
+        p = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if not p:
+            return
+        with open(p, 'r') as f:
+            d = json.load(f)
+        self.bpm = d.get('bpm', 120)
+        self.bpm_var.set(self.bpm)
+        self.metronome.set_bpm(self.bpm)
+        self.beats_per_bar = d.get('bpb', 4)
+        self.bpb_var.set(self.beats_per_bar)
+        self.mix = d.get('mix', 0.5)
+        self.mix_var.set(self.mix)
+        self.blend_mode = d.get('blend', 'normal')
+        self.blend_var.set(self.blend_mode)
+        self.mbright.set(d.get('mbright', 0))
+        self.mcontr.set(d.get('mcontr', 1))
+        if 'mix_mod' in d:
+            self.mix_mod.from_dict(d['mix_mod'])
+            self.update_mod_ui(self.mix_mod_c, self.mix_mod)
+        if 'ch_a' in d:
+            self.channel_a.from_dict(d['ch_a'])
+            self.update_ch_ui(self.channel_a, self.ch_a)
+        if 'ch_b' in d:
+            self.channel_b.from_dict(d['ch_b'])
+            self.update_ch_ui(self.channel_b, self.ch_b)
+        self.status.set("Loaded preset")
+    
+    def save_project(self):
+        p = filedialog.asksaveasfilename(defaultextension=".vmproj", filetypes=[("Project", "*.vmproj")])
+        if not p:
+            return
+        d = {'bpm': self.bpm, 'bpb': self.beats_per_bar, 'mix': self.mix, 'blend': self.blend_mode,
+             'mbright': self.mbright.get(), 'mcontr': self.mcontr.get(), 'metro': self.metro_var.get(), 'mvol': self.mvol.get(),
+             'mix_mod': self.mix_mod.to_dict(), 'ch_a': self.channel_a.to_dict(True), 'ch_b': self.channel_b.to_dict(True)}
+        with open(p, 'w') as f:
+            json.dump(d, f, indent=2)
+        self.status.set("Saved project")
+    
+    def load_project(self):
+        p = filedialog.askopenfilename(filetypes=[("Project", "*.vmproj *.json")])
+        if not p:
+            return
+        self.stop()
+        with open(p, 'r') as f:
+            d = json.load(f)
+        self.bpm = d.get('bpm', 120)
+        self.bpm_var.set(self.bpm)
+        self.metronome.set_bpm(self.bpm)
+        self.beats_per_bar = d.get('bpb', 4)
+        self.bpb_var.set(self.beats_per_bar)
+        self.metronome.set_beats_per_bar(self.beats_per_bar)
+        self.mix = d.get('mix', 0.5)
+        self.mix_var.set(self.mix)
+        self.blend_mode = d.get('blend', 'normal')
+        self.blend_var.set(self.blend_mode)
+        self.mbright.set(d.get('mbright', 0))
+        self.mcontr.set(d.get('mcontr', 1))
+        self.metro_var.set(d.get('metro', False))
+        self.metronome.enabled = self.metro_var.get()
+        self.mvol.set(d.get('mvol', 0.5))
+        self.metronome.update_volume(self.mvol.get())
+        if 'mix_mod' in d:
+            self.mix_mod.from_dict(d['mix_mod'])
+            self.update_mod_ui(self.mix_mod_c, self.mix_mod)
+        if 'ch_a' in d:
+            self.channel_a.from_dict(d['ch_a'], True)
+            self.update_ch_ui(self.channel_a, self.ch_a)
+        if 'ch_b' in d:
+            self.channel_b.from_dict(d['ch_b'], True)
+            self.update_ch_ui(self.channel_b, self.ch_b)
+        self.status.set("Loaded project")
+
+
+class ExportDialog:
+    def __init__(self, parent, bpm, bpb):
+        self.result = None
+        self.bpm = bpm
+        self.bpb = bpb
+        
+        dlg = tk.Toplevel(parent)
+        dlg.title("Export Video")
+        dlg.geometry("300x280")
+        dlg.transient(parent)
+        dlg.grab_set()
+        
+        f = ttk.Frame(dlg, padding="15")
+        f.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(f, text="Bars:").pack(anchor=tk.W)
+        row1 = ttk.Frame(f)
+        row1.pack(fill=tk.X, pady=(0, 8))
+        self.bars = tk.IntVar(value=8)
+        ttk.Spinbox(row1, from_=1, to=999, textvariable=self.bars, width=6, command=self.update_duration).pack(side=tk.LEFT)
+        self.dur_var = tk.StringVar()
+        self.update_duration()
+        ttk.Label(row1, textvariable=self.dur_var).pack(side=tk.LEFT, padx=10)
+        
+        ttk.Label(f, text="Format:").pack(anchor=tk.W)
+        row2 = ttk.Frame(f)
+        row2.pack(fill=tk.X, pady=(0, 8))
+        self.format = tk.StringVar(value="avi")
+        ttk.Radiobutton(row2, text="MOV", variable=self.format, value="mov").pack(side=tk.LEFT)
+        ttk.Radiobutton(row2, text="MP4", variable=self.format, value="mp4").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(row2, text="AVI", variable=self.format, value="avi").pack(side=tk.LEFT)
+        
+        ttk.Label(f, text="FPS:").pack(anchor=tk.W)
+        self.fps = tk.IntVar(value=24)
+        ttk.Combobox(f, textvariable=self.fps, values=[24, 25, 30, 60], width=6).pack(anchor=tk.W, pady=(0, 8))
+        
+        ttk.Label(f, text="Resolution:").pack(anchor=tk.W)
+        self.res = tk.StringVar(value="1920x1080")
+        ttk.Combobox(f, textvariable=self.res, values=["1280x720", "1920x1080", "2560x1440", "3840x2160"], width=12).pack(anchor=tk.W, pady=(0, 8))
+        
+        ttk.Label(f, text=f"BPM: {bpm}  Beats/Bar: {bpb}").pack(anchor=tk.W, pady=(0, 8))
+        
+        row_btn = ttk.Frame(f)
+        row_btn.pack(fill=tk.X, pady=5)
+        tk.Button(row_btn, text="Export", command=lambda: self.on_ok(dlg), width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(row_btn, text="Cancel", command=dlg.destroy, width=10).pack(side=tk.LEFT, padx=5)
+        
+        dlg.wait_window()
+    
+    def update_duration(self):
+        try:
+            dur = self.bars.get() * self.bpb * 60 / self.bpm
+            self.dur_var.set(f"= {dur:.1f}s")
+        except:
+            pass
+    
+    def on_ok(self, dlg):
+        r = self.res.get().split('x')
+        self.result = {
+            'bars': self.bars.get(),
+            'fps': self.fps.get(),
+            'width': int(r[0]),
+            'height': int(r[1]),
+            'format': self.format.get()
+        }
+        dlg.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VideoMixer(root)
+    root.mainloop()
