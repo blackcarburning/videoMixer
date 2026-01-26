@@ -780,7 +780,7 @@ class VideoMixer:
         self.channel_b = VideoChannel(self.preview_width, self.preview_height)
         
         self.audio_track = AudioChannel()
-        self.global_loop_enabled = False
+        self.global_loop_enabled = True
         self.global_loop_start = 0 
         self.global_loop_end = 4 
         self.loop_trigger_flag = False
