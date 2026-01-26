@@ -50,6 +50,7 @@ class NativeAudioEngine:
     def is_playing(self):
         if not self.is_loaded: return False
         _, status = self._send(f"status {self.alias} mode")
+        print(f"MCI status: '{status}'")
         return status == "playing"
 
     def get_position(self):
