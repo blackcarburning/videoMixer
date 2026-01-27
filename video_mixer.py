@@ -318,6 +318,22 @@ class VideoChannel:
         self.speed_mod.wave_type = "sine"
         self.speed_mod.rate = 2.0
         self.speed_mod.depth = 1.0
+        self.mosh_mod = Modulator()
+        self.mosh_mod.wave_type = "sine"
+        self.mosh_mod.rate = 0.25
+        self.mosh_mod.depth = 1.0
+        self.echo_amount = 0.0
+        self.echo_buffer = None
+        self.echo_mod = Modulator()
+        self.echo_mod.wave_type = "triangle"
+        self.echo_mod.rate = 1.0
+        self.echo_mod.depth = 1.0
+        self.slicer_amount = 0.0
+        self.slicer_buffer = None
+        self.slicer_mod = Modulator()
+        self.slicer_mod.wave_type = "square"
+        self.slicer_mod.rate = 2.0
+        self.slicer_mod.depth = 1.0
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -339,6 +355,8 @@ class VideoChannel:
             self.resized_cache.clear()
             self.current_resized = None
             self.mosh_buffer = None
+            self.echo_buffer = None
+            self.slicer_buffer = None
     
     def to_dict(self, include_video=False):
         d = {'brightness': self.brightness, 'contrast': self.contrast, 'saturation': self.saturation,
@@ -346,6 +364,7 @@ class VideoChannel:
              'reverse': self.reverse, 'glitch_rate': self.glitch_rate,
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
              'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
+             'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
              'beat_loop_enabled': self.beat_loop_enabled, 
@@ -355,7 +374,8 @@ class VideoChannel:
              'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
              'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
              'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict(),
-             'chroma_mod': self.chroma_mod.to_dict(),
+             'chroma_mod': self.chroma_mod.to_dict(), 'mosh_mod': self.mosh_mod.to_dict(),
+             'echo_mod': self.echo_mod.to_dict(), 'slicer_mod': self.slicer_mod.to_dict(),
              'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
@@ -377,6 +397,8 @@ class VideoChannel:
             self.posterize_rate = d.get('posterize_rate', 0.0)
             self.mirror_mode = d.get('mirror_mode', "Off")
             self.mosh_amount = d.get('mosh_amount', 0.0)
+            self.echo_amount = d.get('echo_amount', 0.0)
+            self.slicer_amount = d.get('slicer_amount', 0.0)
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -384,7 +406,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -407,6 +429,8 @@ class VideoChannel:
             self.current_frame_idx = -1
             self.current_resized = None
             self.mosh_buffer = None
+            self.echo_buffer = None
+            self.slicer_buffer = None
             return True
     
     def reset_position(self):
@@ -430,6 +454,8 @@ class VideoChannel:
             self.posterize_rate = 0.0
             self.mirror_mode = "Off"
             self.mosh_amount = 0.0
+            self.echo_amount = 0.0
+            self.slicer_amount = 0.0
             self.seq_gate = [1] * 16
             self.seq_stutter = [0] * 16
             self.seq_speed = [0] * 16
@@ -458,6 +484,18 @@ class VideoChannel:
             self.speed_mod.wave_type = "sine"
             self.speed_mod.rate = 2.0
             self.speed_mod.depth = 1.0
+            self.mosh_mod.reset()
+            self.mosh_mod.wave_type = "sine"
+            self.mosh_mod.rate = 0.25
+            self.mosh_mod.depth = 1.0
+            self.echo_mod.reset()
+            self.echo_mod.wave_type = "triangle"
+            self.echo_mod.rate = 1.0
+            self.echo_mod.depth = 1.0
+            self.slicer_mod.reset()
+            self.slicer_mod.wave_type = "square"
+            self.slicer_mod.rate = 2.0
+            self.slicer_mod.depth = 1.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -670,15 +708,60 @@ class VideoChannel:
 
         frame = self._apply_mirror(frame, beat_pos)
 
-        if self.mosh_amount > 0.01:
-            frame = frame.copy()  # Always work on a copy
+        # Apply mosh modulator to mosh_amount
+        effective_mosh = self.mosh_amount
+        if self.mosh_mod.enabled:
+            mod_val = (self.mosh_mod.get_value(beat_pos) + 1.0) / 2.0  # Map -1..1 to 0..1
+            effective_mosh = self.mosh_amount * mod_val
+
+        if effective_mosh > 0.01:
+            frame = frame.copy()
             if self.mosh_buffer is None or self.mosh_buffer.shape != frame.shape:
                 self.mosh_buffer = frame.copy()
             else:
-                alpha = 1.0 - self.mosh_amount
-                # Blend current frame with buffer
-                self.mosh_buffer = cv2.addWeighted(frame, alpha, self.mosh_buffer, self.mosh_amount, 0)
+                alpha = 1.0 - effective_mosh
+                self.mosh_buffer = cv2.addWeighted(frame, alpha, self.mosh_buffer, effective_mosh, 0)
             frame = self.mosh_buffer.copy()
+
+        # Echo effect - creates motion trails by layering previous frames
+        effective_echo = self.echo_amount
+        if self.echo_mod.enabled:
+            mod_val = (self.echo_mod.get_value(beat_pos) + 1.0) / 2.0
+            effective_echo = self.echo_amount * mod_val
+
+        if effective_echo > 0.01:
+            frame = frame.copy()
+            if self.echo_buffer is None or self.echo_buffer.shape != frame.shape:
+                self.echo_buffer = frame.copy()
+            else:
+                # Blend with echo buffer (stronger persistence than mosh)
+                alpha = 1.0 - (effective_echo * 0.7)  # Max 70% echo retention
+                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.7, 0)
+            # Layer current frame over echo
+            frame = cv2.addWeighted(frame, 0.6, self.echo_buffer, 0.4, 0)
+
+        # Slicer effect - creates scanline displacement glitches
+        effective_slicer = self.slicer_amount
+        if self.slicer_mod.enabled:
+            mod_val = (self.slicer_mod.get_value(beat_pos) + 1.0) / 2.0
+            effective_slicer = self.slicer_amount * mod_val
+
+        if effective_slicer > 0.01:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            if self.slicer_buffer is None or self.slicer_buffer.shape != frame.shape:
+                self.slicer_buffer = frame.copy()
+            else:
+                # Slice frame into horizontal strips
+                num_slices = 16
+                slice_height = h // num_slices
+                for i in range(num_slices):
+                    y_start = i * slice_height
+                    y_end = min((i + 1) * slice_height, h)
+                    # Randomly choose to use current or buffered slice
+                    if random.random() < effective_slicer:
+                        frame[y_start:y_end, :] = self.slicer_buffer[y_start:y_end, :]
+                self.slicer_buffer = frame.copy()
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1634,6 +1717,19 @@ class VideoMixer:
         ttk.Label(fr_mosh, text="Mosh:").pack(side=tk.LEFT)
         c['mosh'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_mosh, from_=0.0, to=1.0, variable=c['mosh'], length=80, command=lambda v, ch=ch: setattr(ch, 'mosh_amount', float(v))).pack(side=tk.LEFT)
+        c['mosh_mod'] = self.setup_mod_simple(fr_mosh, ch.mosh_mod, "LFO")
+        fr_echo = ttk.Frame(tab_fx)
+        fr_echo.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_echo, text="Echo:").pack(side=tk.LEFT)
+        c['echo'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_echo, from_=0.0, to=1.0, variable=c['echo'], length=80, command=lambda v, ch=ch: setattr(ch, 'echo_amount', float(v))).pack(side=tk.LEFT)
+        c['echo_mod'] = self.setup_mod_simple(fr_echo, ch.echo_mod, "LFO")
+        fr_slicer = ttk.Frame(tab_fx)
+        fr_slicer.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_slicer, text="Slicer:").pack(side=tk.LEFT)
+        c['slicer'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_slicer, from_=0.0, to=1.0, variable=c['slicer'], length=80, command=lambda v, ch=ch: setattr(ch, 'slicer_amount', float(v))).pack(side=tk.LEFT)
+        c['slicer_mod'] = self.setup_mod_simple(fr_slicer, ch.slicer_mod, "LFO")
         fr_post = ttk.Frame(tab_fx)
         fr_post.pack(fill=tk.X, pady=2)
         ttk.Label(fr_post, text="Postrz:").pack(side=tk.LEFT)
@@ -1801,6 +1897,8 @@ class VideoMixer:
                 break
         c['mirror_mode'].set(ch.mirror_mode)
         c['mosh'].set(ch.mosh_amount)
+        c['echo'].set(ch.echo_amount)
+        c['slicer'].set(ch.slicer_amount)
         c['bl_en'].set(ch.beat_loop_enabled)
         for label, val in VideoChannel.LOOP_LENGTH_OPTIONS.items():
              if abs(val - ch.loop_length_beats) < 0.001:
@@ -1821,7 +1919,8 @@ class VideoMixer:
             mc['inv'].set(m.invert)
         for m, k in [(ch.loop_start_mod, 'loop_start_mod'), (ch.rgb_mod, 'rgb_mod'), 
                      (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod'),
-                     (ch.chroma_mod, 'chroma_mod'),
+                     (ch.chroma_mod, 'chroma_mod'), (ch.mosh_mod, 'mosh_mod'), 
+                     (ch.echo_mod, 'echo_mod'), (ch.slicer_mod, 'slicer_mod'),
                      (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod')]:
             mc = c[k]
             mc['en'].set(m.enabled)
