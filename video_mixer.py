@@ -1039,6 +1039,9 @@ class VideoProcessor(threading.Thread):
                         self.start_time = now
                     # Set beat position to loop start
                     total_beats = start_beats
+                    # Reset metronome to one beat before loop start so check_tick() detects the downbeat
+                    # (check_tick uses: if int(beat_pos) > int(current_beat) to trigger ticks)
+                    self.mixer.metronome.current_beat = start_beats - 1.0
                 else:
                     # Within loop range - calculate beat position from elapsed time
                     rel_beats = (elapsed_ms / 1000.0) * (self.mixer.bpm / 60.0)
@@ -1334,12 +1337,16 @@ class VideoMixer:
     
     def load_audio(self):
         p = filedialog.askopenfilename(filetypes=[("Audio", "*.wav *.mp3 *.ogg")])
-        if p and self.audio_track.load(p):
+        if not p:
+            return
+            
+        # Load waveform into timeline widget FIRST to avoid file lock issues
+        if hasattr(self, 'timeline_widget'):
+            self.timeline_widget.load_audio_waveform(p)
+            
+        if self.audio_track.load(p):
             self.audio_status.set(os.path.basename(p)[:10])
             self.status.set(f"Audio Loaded: {os.path.basename(p)}")
-            # Load waveform into timeline widget
-            if hasattr(self, 'timeline_widget'):
-                self.timeline_widget.load_audio_waveform(p)
 
     def setup_channel(self, parent, ch, title):
         c = {}
