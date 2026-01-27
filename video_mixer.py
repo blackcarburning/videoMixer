@@ -670,6 +670,307 @@ class SequencerWidget(tk.Canvas):
             if val >= len(self.colors): val = 0
             self.itemconfigure(r, fill=self.colors[val])
 
+class TimelineWidget(tk.Canvas):
+    """Interactive timeline widget with waveform visualization and draggable loop points."""
+    
+    def __init__(self, parent, mixer):
+        super().__init__(parent, height=120, bg="#1a1a1a", highlightthickness=1, highlightbackground="#555")
+        self.mixer = mixer
+        self.waveform_data = None
+        self.sample_rate = 44100
+        self.duration_sec = 0
+        
+        # Dragging state
+        self.dragging = None  # 'start', 'end', or None
+        self.drag_offset = 0
+        
+        # Visual elements
+        self.waveform_lines = []
+        self.grid_lines = []
+        self.loop_start_handle = None
+        self.loop_end_handle = None
+        self.playhead_line = None
+        
+        # Bind mouse events
+        self.bind("<Button-1>", self.on_mouse_down)
+        self.bind("<B1-Motion>", self.on_mouse_drag)
+        self.bind("<ButtonRelease-1>", self.on_mouse_up)
+        self.bind("<Configure>", self.on_resize)
+        
+        self.draw_empty()
+    
+    def draw_empty(self):
+        """Draw an empty timeline when no audio is loaded."""
+        self.delete("all")
+        w = self.winfo_width() or 800
+        h = self.winfo_height() or 120
+        self.create_text(w // 2, h // 2, text="No Audio Loaded", fill="#666", font=("Arial", 12))
+    
+    def load_audio_waveform(self, audio_path):
+        """Extract and cache waveform data from audio file."""
+        try:
+            import pygame.sndarray
+            
+            # Load audio as a pygame Sound object to extract samples
+            sound = pygame.mixer.Sound(audio_path)
+            self.duration_sec = sound.get_length()
+            
+            # Extract sample data using pygame.sndarray
+            samples = pygame.sndarray.array(sound)
+            
+            # Convert to mono if stereo (average channels)
+            if len(samples.shape) > 1 and samples.shape[1] > 1:
+                samples = np.mean(samples, axis=1)
+            
+            # Normalize to -1 to 1 range
+            samples = samples.astype(np.float32)
+            if np.max(np.abs(samples)) > 0:
+                samples = samples / np.max(np.abs(samples))
+            
+            # Downsample for visualization (keep every Nth sample based on duration)
+            target_points = 2000  # Number of points to display
+            step = max(1, len(samples) // target_points)
+            self.waveform_data = samples[::step]
+            
+            self.redraw()
+            
+        except Exception as e:
+            print(f"Failed to load waveform: {e}")
+            self.waveform_data = None
+            self.draw_empty()
+    
+    def redraw(self):
+        """Redraw the entire timeline."""
+        self.delete("all")
+        
+        if self.waveform_data is None or len(self.waveform_data) == 0:
+            self.draw_empty()
+            return
+        
+        w = self.winfo_width()
+        h = self.winfo_height()
+        
+        if w <= 1 or h <= 1:
+            return
+        
+        # Draw waveform
+        self.draw_waveform(w, h)
+        
+        # Draw grid
+        self.draw_grid(w, h)
+        
+        # Draw loop handles
+        self.draw_loop_handles(w, h)
+        
+        # Draw playhead
+        self.draw_playhead(w, h)
+    
+    def draw_waveform(self, w, h):
+        """Draw the audio waveform."""
+        if self.waveform_data is None:
+            return
+        
+        mid_y = h // 2
+        amp_scale = (h // 2) * 0.8
+        
+        # Draw waveform as lines
+        num_points = len(self.waveform_data)
+        x_step = w / max(1, num_points - 1)
+        
+        for i in range(num_points - 1):
+            x1 = i * x_step
+            x2 = (i + 1) * x_step
+            y1 = mid_y - self.waveform_data[i] * amp_scale
+            y2 = mid_y - self.waveform_data[i + 1] * amp_scale
+            
+            self.create_line(x1, y1, x2, y2, fill="#4488ff", width=1)
+    
+    def draw_grid(self, w, h):
+        """Draw grid lines representing bars."""
+        if self.duration_sec <= 0:
+            return
+        
+        bpm = self.mixer.bpm
+        beats_per_bar = self.mixer.beats_per_bar
+        
+        # Calculate bar duration in seconds
+        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        
+        # Draw vertical lines for each bar
+        bar_num = 0
+        while True:
+            bar_time_sec = bar_num * bar_duration_sec
+            if bar_time_sec > self.duration_sec:
+                break
+            
+            x = (bar_time_sec / self.duration_sec) * w
+            
+            # Draw bar line
+            color = "#888" if bar_num % 4 == 0 else "#444"
+            width = 2 if bar_num % 4 == 0 else 1
+            self.create_line(x, 0, x, h, fill=color, width=width, tags="grid")
+            
+            # Draw bar number
+            if bar_num % 4 == 0:
+                self.create_text(x + 2, 10, text=str(bar_num), fill="#aaa", anchor="nw", font=("Arial", 8), tags="grid")
+            
+            bar_num += 1
+    
+    def draw_loop_handles(self, w, h):
+        """Draw the loop start and end handles."""
+        if self.duration_sec <= 0:
+            return
+        
+        bpm = self.mixer.bpm
+        beats_per_bar = self.mixer.beats_per_bar
+        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        
+        # Calculate positions
+        start_time_sec = self.mixer.global_loop_start * bar_duration_sec
+        end_time_sec = self.mixer.global_loop_end * bar_duration_sec
+        
+        start_x = (start_time_sec / self.duration_sec) * w
+        end_x = (end_time_sec / self.duration_sec) * w
+        
+        # Draw loop region (shaded area)
+        self.create_rectangle(start_x, 0, end_x, h, fill="#00ff0020", outline="", tags="loop_region")
+        
+        # Draw start handle
+        self.loop_start_handle = self.create_line(start_x, 0, start_x, h, fill="#00ff00", width=3, tags="loop_start")
+        self.create_text(start_x + 3, 25, text=f"Start: {self.mixer.global_loop_start}", 
+                        fill="#00ff00", anchor="nw", font=("Arial", 9, "bold"), tags="loop_start")
+        
+        # Draw end handle
+        self.loop_end_handle = self.create_line(end_x, 0, end_x, h, fill="#ff0000", width=3, tags="loop_end")
+        self.create_text(end_x + 3, 40, text=f"End: {self.mixer.global_loop_end}", 
+                        fill="#ff0000", anchor="nw", font=("Arial", 9, "bold"), tags="loop_end")
+    
+    def draw_playhead(self, w, h):
+        """Draw the current playback position."""
+        if not self.mixer.playing or self.duration_sec <= 0:
+            return
+        
+        # Calculate current playback position
+        if hasattr(self.mixer, 'beat_position'):
+            beat_pos = self.mixer.beat_position
+            bar_pos = beat_pos / self.mixer.beats_per_bar
+            
+            bpm = self.mixer.bpm
+            beats_per_bar = self.mixer.beats_per_bar
+            bar_duration_sec = (60.0 / bpm) * beats_per_bar
+            
+            time_sec = bar_pos * bar_duration_sec
+            x = (time_sec / self.duration_sec) * w
+            
+            # Draw playhead line
+            self.playhead_line = self.create_line(x, 0, x, h, fill="#ffff00", width=2, tags="playhead")
+    
+    def update_playhead(self):
+        """Update only the playhead position (called frequently during playback)."""
+        if not self.mixer.playing or self.duration_sec <= 0:
+            if self.playhead_line:
+                self.delete("playhead")
+                self.playhead_line = None
+            return
+        
+        w = self.winfo_width()
+        h = self.winfo_height()
+        
+        if w <= 1 or h <= 1:
+            return
+        
+        # Calculate current playback position
+        beat_pos = self.mixer.beat_position
+        bar_pos = beat_pos / self.mixer.beats_per_bar
+        
+        bpm = self.mixer.bpm
+        beats_per_bar = self.mixer.beats_per_bar
+        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        
+        time_sec = bar_pos * bar_duration_sec
+        x = (time_sec / self.duration_sec) * w
+        
+        # Update playhead position
+        self.delete("playhead")
+        self.playhead_line = self.create_line(x, 0, x, h, fill="#ffff00", width=2, tags="playhead")
+    
+    def on_mouse_down(self, event):
+        """Handle mouse button press."""
+        if self.duration_sec <= 0:
+            return
+        
+        w = self.winfo_width()
+        bpm = self.mixer.bpm
+        beats_per_bar = self.mixer.beats_per_bar
+        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        
+        # Calculate positions
+        start_time_sec = self.mixer.global_loop_start * bar_duration_sec
+        end_time_sec = self.mixer.global_loop_end * bar_duration_sec
+        
+        start_x = (start_time_sec / self.duration_sec) * w
+        end_x = (end_time_sec / self.duration_sec) * w
+        
+        # Check if clicked near start or end handle
+        click_tolerance = 10
+        
+        if abs(event.x - start_x) < click_tolerance:
+            self.dragging = 'start'
+            self.drag_offset = event.x - start_x
+        elif abs(event.x - end_x) < click_tolerance:
+            self.dragging = 'end'
+            self.drag_offset = event.x - end_x
+    
+    def on_mouse_drag(self, event):
+        """Handle mouse drag."""
+        if self.dragging is None or self.duration_sec <= 0:
+            return
+        
+        w = self.winfo_width()
+        bpm = self.mixer.bpm
+        beats_per_bar = self.mixer.beats_per_bar
+        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        
+        # Calculate time position from mouse x
+        adjusted_x = event.x - self.drag_offset
+        time_sec = (adjusted_x / w) * self.duration_sec
+        
+        # Convert to bar position
+        bar_pos = time_sec / bar_duration_sec
+        
+        # Snap to nearest bar
+        snapped_bar = round(bar_pos)
+        snapped_bar = max(0, snapped_bar)
+        
+        # Update the appropriate loop point
+        if self.dragging == 'start':
+            # Ensure start < end
+            if snapped_bar < self.mixer.global_loop_end:
+                self.mixer.global_loop_start = snapped_bar
+                self.mixer.gloop_start.set(snapped_bar)
+        elif self.dragging == 'end':
+            # Ensure end > start
+            if snapped_bar > self.mixer.global_loop_start:
+                self.mixer.global_loop_end = snapped_bar
+                self.mixer.gloop_end.set(snapped_bar)
+        
+        # Redraw loop handles
+        w = self.winfo_width()
+        h = self.winfo_height()
+        self.delete("loop_region")
+        self.delete("loop_start")
+        self.delete("loop_end")
+        self.draw_loop_handles(w, h)
+    
+    def on_mouse_up(self, event):
+        """Handle mouse button release."""
+        self.dragging = None
+        self.drag_offset = 0
+    
+    def on_resize(self, event):
+        """Handle canvas resize."""
+        self.redraw()
+
 class VideoProcessor(threading.Thread):
     def __init__(self, mixer):
         super().__init__(daemon=True)
@@ -990,6 +1291,12 @@ class VideoMixer:
         ttk.Button(row6, text="Save Preset", command=self.save_preset).pack(side=tk.LEFT, padx=2)
         tk.Button(row6, text="Export", command=self.export_video, font=("Arial", 10)).pack(side=tk.LEFT, padx=10)
         
+        # Timeline Widget
+        timeline_frame = ttk.LabelFrame(main, text="Timeline", padding="5")
+        timeline_frame.pack(fill=tk.X, pady=(5, 0))
+        self.timeline_widget = TimelineWidget(timeline_frame, self)
+        self.timeline_widget.pack(fill=tk.BOTH, expand=True)
+        
         # Status Bar
         self.status_bar = ttk.Label(main, textvariable=self.status, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(5,0))
@@ -1003,6 +1310,9 @@ class VideoMixer:
         try:
             self.bpm = float(self.bpm_var.get())
             self.metronome.set_bpm(self.bpm)
+            # Update timeline widget when BPM changes
+            if hasattr(self, 'timeline_widget'):
+                self.timeline_widget.redraw()
         except:
             pass
         
@@ -1027,6 +1337,9 @@ class VideoMixer:
         if p and self.audio_track.load(p):
             self.audio_status.set(os.path.basename(p)[:10])
             self.status.set(f"Audio Loaded: {os.path.basename(p)}")
+            # Load waveform into timeline widget
+            if hasattr(self, 'timeline_widget'):
+                self.timeline_widget.load_audio_waveform(p)
 
     def setup_channel(self, parent, ch, title):
         c = {}
@@ -1394,9 +1707,14 @@ class VideoMixer:
         self.audio_track.stop()
         self.loop_trigger_flag = False
         
+        # Calculate start offset in milliseconds based on global_loop_start
+        bar_duration_ms = (60.0 / self.bpm) * self.beats_per_bar * 1000.0
+        loop_start_ms = int(self.global_loop_start * bar_duration_ms)
+        
         audio_started = False
         if self.audio_track.enabled and self.audio_track.path:
-            self.audio_track.play(0)
+            # Start audio at the loop_start position, not 0
+            self.audio_track.play(loop_start_ms)
             for _ in range(20):
                 time.sleep(0.01)
                 if self.audio_track.is_active():
@@ -1405,7 +1723,8 @@ class VideoMixer:
         
         self.start_time = time.perf_counter()
         self.last_update_time = self.start_time
-        self.beat_position = 0
+        # Start beat position at global_loop_start beats
+        self.beat_position = self.global_loop_start * self.beats_per_bar
         
         self.metronome.synchronized_start(self.start_time)
         self.processor.start_proc(self.start_time)
@@ -1462,6 +1781,11 @@ class VideoMixer:
             img = Image.fromarray(rgb)
             self.preview_photo = ImageTk.PhotoImage(img)
             self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
+        
+        # Update timeline playhead
+        if hasattr(self, 'timeline_widget'):
+            self.timeline_widget.update_playhead()
+        
         now = time.perf_counter()
         dt = now - self.last_update_time
         if dt > 0:
