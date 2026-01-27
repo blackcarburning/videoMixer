@@ -12,6 +12,7 @@ import queue
 import random
 import ctypes
 import pygame
+import pygame.sndarray
 
 # --- PYGAME AUDIO ENGINE ---
 class NativeAudioEngine:
@@ -709,8 +710,6 @@ class TimelineWidget(tk.Canvas):
     def load_audio_waveform(self, audio_path):
         """Extract and cache waveform data from audio file."""
         try:
-            import pygame.sndarray
-            
             # Load audio as a pygame Sound object to extract samples
             sound = pygame.mixer.Sound(audio_path)
             self.duration_sec = sound.get_length()
@@ -719,13 +718,14 @@ class TimelineWidget(tk.Canvas):
             samples = pygame.sndarray.array(sound)
             
             # Convert to mono if stereo (average channels)
-            if len(samples.shape) > 1 and samples.shape[1] > 1:
+            if samples.ndim > 1 and samples.shape[1] > 1:
                 samples = np.mean(samples, axis=1)
             
             # Normalize to -1 to 1 range
             samples = samples.astype(np.float32)
-            if np.max(np.abs(samples)) > 0:
-                samples = samples / np.max(np.abs(samples))
+            max_abs_sample = np.max(np.abs(samples))
+            if max_abs_sample > 0:
+                samples = samples / max_abs_sample
             
             # Downsample for visualization (keep every Nth sample based on duration)
             target_points = 2000  # Number of points to display
@@ -955,12 +955,12 @@ class TimelineWidget(tk.Canvas):
                 self.mixer.gloop_end.set(snapped_bar)
         
         # Redraw loop handles
-        w = self.winfo_width()
-        h = self.winfo_height()
+        canvas_width = self.winfo_width()
+        canvas_height = self.winfo_height()
         self.delete("loop_region")
         self.delete("loop_start")
         self.delete("loop_end")
-        self.draw_loop_handles(w, h)
+        self.draw_loop_handles(canvas_width, canvas_height)
     
     def on_mouse_up(self, event):
         """Handle mouse button release."""
