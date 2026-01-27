@@ -334,6 +334,9 @@ class VideoChannel:
         self.slicer_mod.wave_type = "square"
         self.slicer_mod.rate = 2.0
         self.slicer_mod.depth = 1.0
+        self.colorkey_enabled = False
+        self.colorkey_color = [0.0, 1.0, 0.0]  # Default green in RGB (0-1 range)
+        self.colorkey_tolerance = 0.3
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -365,6 +368,9 @@ class VideoChannel:
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
              'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
              'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
+             'colorkey_enabled': self.colorkey_enabled, 
+             'colorkey_color': self.colorkey_color, 
+             'colorkey_tolerance': self.colorkey_tolerance,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
              'beat_loop_enabled': self.beat_loop_enabled, 
@@ -399,6 +405,9 @@ class VideoChannel:
             self.mosh_amount = d.get('mosh_amount', 0.0)
             self.echo_amount = d.get('echo_amount', 0.0)
             self.slicer_amount = d.get('slicer_amount', 0.0)
+            self.colorkey_enabled = d.get('colorkey_enabled', False)
+            self.colorkey_color = d.get('colorkey_color', [0.0, 1.0, 0.0])
+            self.colorkey_tolerance = d.get('colorkey_tolerance', 0.3)
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -456,6 +465,9 @@ class VideoChannel:
             self.mosh_amount = 0.0
             self.echo_amount = 0.0
             self.slicer_amount = 0.0
+            self.colorkey_enabled = False
+            self.colorkey_color = [0.0, 1.0, 0.0]
+            self.colorkey_tolerance = 0.3
             self.seq_gate = [1] * 16
             self.seq_stutter = [0] * 16
             self.seq_speed = [0] * 16
@@ -730,15 +742,17 @@ class VideoChannel:
             effective_echo = self.echo_amount * mod_val
 
         if effective_echo > 0.01:
-            frame = frame.copy()
+            if not frame.flags['WRITEABLE']:
+                frame = frame.copy()
             if self.echo_buffer is None or self.echo_buffer.shape != frame.shape:
-                self.echo_buffer = frame.copy()
+                self.echo_buffer = frame.astype(np.float32)
             else:
-                # Blend with echo buffer (stronger persistence than mosh)
-                alpha = 1.0 - (effective_echo * 0.7)  # Max 70% echo retention
-                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.7, 0)
-            # Layer current frame over echo
-            frame = cv2.addWeighted(frame, 0.6, self.echo_buffer, 0.4, 0)
+                # Decay echo buffer and blend with current frame
+                echo_decay = 0.85  # How much echo persists
+                self.echo_buffer = self.echo_buffer * echo_decay + frame * (1.0 - echo_decay)
+            # Mix current frame with echo buffer based on effect amount
+            frame = frame * (1.0 - effective_echo * 0.6) + self.echo_buffer * (effective_echo * 0.6)
+            frame = np.clip(frame, 0, 1)  # Ensure values stay in valid range
 
         # Slicer effect - creates scanline displacement glitches
         effective_slicer = self.slicer_amount
@@ -762,6 +776,41 @@ class VideoChannel:
                     if random.random() < effective_slicer:
                         frame[y_start:y_end, :] = self.slicer_buffer[y_start:y_end, :]
                 self.slicer_buffer = frame.copy()
+
+        # Color Key filter - only show pixels matching target color
+        if self.colorkey_enabled and self.colorkey_tolerance > 0:
+            if not frame.flags['WRITEABLE']:
+                frame = frame.copy()
+            
+            # Convert target color from RGB to HSV for better color matching
+            target_rgb = np.uint8([[self.colorkey_color]]) * 255
+            target_hsv = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2HSV)[0][0]
+            
+            # Convert frame to HSV
+            frame_uint8 = (frame * 255).astype(np.uint8)
+            frame_hsv = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2HSV)
+            
+            # Create mask based on hue similarity (more robust than RGB distance)
+            hue_tolerance = self.colorkey_tolerance * 180  # Scale to HSV hue range (0-180)
+            sat_tolerance = self.colorkey_tolerance * 255
+            val_tolerance = self.colorkey_tolerance * 255
+            
+            lower_bound = np.array([
+                max(0, target_hsv[0] - hue_tolerance),
+                max(0, target_hsv[1] - sat_tolerance),
+                max(0, target_hsv[2] - val_tolerance)
+            ])
+            upper_bound = np.array([
+                min(180, target_hsv[0] + hue_tolerance),
+                min(255, target_hsv[1] + sat_tolerance),
+                min(255, target_hsv[2] + val_tolerance)
+            ])
+            
+            mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
+            
+            # Apply mask - keep matching pixels, make others black
+            mask_float = mask.astype(np.float32) / 255.0
+            frame = frame * mask_float[:, :, np.newaxis]
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1730,6 +1779,31 @@ class VideoMixer:
         c['slicer'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_slicer, from_=0.0, to=1.0, variable=c['slicer'], length=80, command=lambda v, ch=ch: setattr(ch, 'slicer_amount', float(v))).pack(side=tk.LEFT)
         c['slicer_mod'] = self.setup_mod_simple(fr_slicer, ch.slicer_mod, "LFO")
+        
+        fr_colorkey = ttk.Frame(tab_fx)
+        fr_colorkey.pack(fill=tk.X, pady=2)
+        c['colorkey_en'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fr_colorkey, text="ColorKey", variable=c['colorkey_en'], 
+                        command=lambda: setattr(ch, 'colorkey_enabled', c['colorkey_en'].get())).pack(side=tk.LEFT)
+
+        # Color picker button
+        def pick_color(ch, c):
+            import tkinter.colorchooser
+            color = tkinter.colorchooser.askcolor(title="Choose Key Color")
+            if color[0]:  # RGB tuple (0-255)
+                # Convert to 0-1 range
+                ch.colorkey_color = [color[0][0]/255.0, color[0][1]/255.0, color[0][2]/255.0]
+                c['colorkey_btn'].config(bg='#%02x%02x%02x' % (int(color[0][0]), int(color[0][1]), int(color[0][2])))
+
+        c['colorkey_btn'] = tk.Button(fr_colorkey, text="Pick", width=5, bg='#00ff00',
+                                       command=lambda: pick_color(ch, c))
+        c['colorkey_btn'].pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(fr_colorkey, text="Tol:").pack(side=tk.LEFT, padx=(5,2))
+        c['colorkey_tol'] = tk.DoubleVar(value=0.3)
+        ttk.Scale(fr_colorkey, from_=0.0, to=1.0, variable=c['colorkey_tol'], length=60,
+                  command=lambda v, ch=ch: setattr(ch, 'colorkey_tolerance', float(v))).pack(side=tk.LEFT)
+        
         fr_post = ttk.Frame(tab_fx)
         fr_post.pack(fill=tk.X, pady=2)
         ttk.Label(fr_post, text="Postrz:").pack(side=tk.LEFT)
@@ -1899,6 +1973,12 @@ class VideoMixer:
         c['mosh'].set(ch.mosh_amount)
         c['echo'].set(ch.echo_amount)
         c['slicer'].set(ch.slicer_amount)
+        c['colorkey_en'].set(ch.colorkey_enabled)
+        c['colorkey_tol'].set(ch.colorkey_tolerance)
+        # Update color button background
+        if ch.colorkey_color:
+            rgb = tuple(int(c*255) for c in ch.colorkey_color)
+            c['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
         c['bl_en'].set(ch.beat_loop_enabled)
         for label, val in VideoChannel.LOOP_LENGTH_OPTIONS.items():
              if abs(val - ch.loop_length_beats) < 0.001:
