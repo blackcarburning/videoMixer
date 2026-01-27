@@ -1409,7 +1409,7 @@ class VideoMixer:
             
             # Auto-calculate loop end based on audio duration
             duration_ms = self.audio_track.engine.duration_ms
-            if duration_ms > 0:
+            if duration_ms > 0 and self.bpm > 0 and self.beats_per_bar > 0:
                 # Calculate duration of one bar in seconds
                 bar_duration_sec = (60.0 / self.bpm) * self.beats_per_bar
                 # Convert file duration to seconds
