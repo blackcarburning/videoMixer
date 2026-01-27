@@ -1039,7 +1039,8 @@ class VideoProcessor(threading.Thread):
                         self.start_time = now
                     # Set beat position to loop start
                     total_beats = start_beats
-                    # Reset metronome state to ensure first beat of loop fires
+                    # Reset metronome to one beat before loop start so check_tick() detects the downbeat
+                    # (check_tick uses: if int(beat_pos) > int(current_beat) to trigger ticks)
                     self.mixer.metronome.current_beat = start_beats - 1.0
                 else:
                     # Within loop range - calculate beat position from elapsed time
