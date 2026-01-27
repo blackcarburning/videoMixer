@@ -297,7 +297,7 @@ class VideoChannel:
         self.beat_loop_enabled = False
         self.loop_length_beats = 4.0 
         self.loop_start_frame = 0
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.target_width = target_width
         self.target_height = target_height
         self.resized_cache = {}
