@@ -1095,6 +1095,19 @@ class VideoProcessor(threading.Thread):
                 # Calculate loop boundaries in ms (using beats directly)
                 beat_duration_ms = (60.0 / self.mixer.bpm) * 1000.0
                 loop_start_ms = self.mixer.global_loop_start * beat_duration_ms
+                
+                # Drift correction: sync to audio clock if active
+                if self.mixer.audio_track.is_active():
+                    audio_pos = self.mixer.audio_track.get_time_ms()
+                    expected_pos = loop_start_ms + elapsed_ms
+                    drift = audio_pos - expected_pos
+                    if abs(drift) > 10:
+                        # Apply 10% correction factor to smooth out jitter
+                        with self.lock:
+                            self.start_time -= (drift / 1000.0) * 0.1
+                        # Recalculate elapsed_ms after adjustment
+                        elapsed_ms = (now - self.start_time) * 1000.0
+                
                 loop_end_ms = self.mixer.global_loop_end * beat_duration_ms
                 loop_duration_ms = loop_end_ms - loop_start_ms
                 
