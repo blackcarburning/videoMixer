@@ -1414,15 +1414,14 @@ class VideoMixer:
                 bar_duration_sec = (60.0 / self.bpm) * self.beats_per_bar
                 # Convert file duration to seconds
                 duration_sec = duration_ms / 1000.0
-                # Round to nearest whole bar
-                num_bars = round(duration_sec / bar_duration_sec)
-                if num_bars > 0:
-                    # Update global_loop_end and UI widget
-                    self.global_loop_end = num_bars
-                    self.gloop_end.set(num_bars)
-                    # Trigger timeline redraw to show correct loop region
-                    if hasattr(self, 'timeline_widget'):
-                        self.timeline_widget.redraw()
+                # Round to nearest whole bar, minimum 1 bar
+                num_bars = max(1, round(duration_sec / bar_duration_sec))
+                # Update global_loop_end and UI widget
+                self.global_loop_end = int(num_bars)
+                self.gloop_end.set(num_bars)
+                # Trigger timeline redraw to show correct loop region
+                if hasattr(self, 'timeline_widget'):
+                    self.timeline_widget.redraw()
 
     def setup_channel(self, parent, ch, title):
         c = {}
