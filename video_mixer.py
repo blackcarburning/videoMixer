@@ -704,6 +704,7 @@ class TimelineWidget(tk.Canvas):
         """Extract and cache waveform data from audio file using min/max approach."""
         try:
             # Load audio as a pygame Sound object to extract samples
+            # Note: pygame.sndarray works best with WAV files; other formats may need conversion
             sound = pygame.mixer.Sound(audio_path)
             self.duration_sec = sound.get_length()
             
@@ -774,7 +775,8 @@ class TimelineWidget(tk.Canvas):
         
         # Min/Max rendering: for each pixel column, find min/max samples
         samples = self.waveform_samples
-        step = len(samples) / max(1, w)
+        # Use float for step to maintain precision across the full width
+        step = len(samples) / float(max(1, w))
         
         for x in range(w):
             idx_start = int(x * step)
@@ -923,6 +925,32 @@ class TimelineWidget(tk.Canvas):
             self.delete("playhead")
             self.create_line(x, 0, x, h, fill="#ffff00", width=3, tags="playhead")
     
+    def _is_click_on_start_handle(self, event_x, event_y, start_x):
+        """Check if click is on the start handle (bar or flag)."""
+        handle_width = 8
+        flag_width = 40
+        click_tolerance = max(handle_width, 15)
+        
+        # Check if clicked on the handle bar or flag
+        on_bar = abs(event_x - start_x) < click_tolerance
+        on_flag = (event_x >= start_x + handle_width//2 and 
+                   event_x <= start_x + handle_width//2 + flag_width and 
+                   event_y <= 25)
+        return on_bar or on_flag
+    
+    def _is_click_on_end_handle(self, event_x, event_y, end_x):
+        """Check if click is on the end handle (bar or flag)."""
+        handle_width = 8
+        flag_width = 40
+        click_tolerance = max(handle_width, 15)
+        
+        # Check if clicked on the handle bar or flag
+        on_bar = abs(event_x - end_x) < click_tolerance
+        on_flag = (event_x >= end_x - handle_width//2 - flag_width and 
+                   event_x <= end_x - handle_width//2 and 
+                   event_y <= 25)
+        return on_bar or on_flag
+    
     def on_mouse_down(self, event):
         """Handle mouse button press with improved wider handle detection."""
         if self.duration_sec <= 0:
@@ -940,15 +968,11 @@ class TimelineWidget(tk.Canvas):
         start_x = (start_time_sec / self.duration_sec) * w
         end_x = (end_time_sec / self.duration_sec) * w
         
-        # Improved click tolerance - use wider handle area
-        handle_width = 8
-        flag_width = 40
-        click_tolerance = max(handle_width, 15)
-        
-        if abs(event.x - start_x) < click_tolerance or (event.x >= start_x + handle_width//2 and event.x <= start_x + handle_width//2 + flag_width and event.y <= 25):
+        # Check which handle was clicked using helper methods
+        if self._is_click_on_start_handle(event.x, event.y, start_x):
             self.dragging = 'start'
             self.drag_offset = event.x - start_x
-        elif abs(event.x - end_x) < click_tolerance or (event.x >= end_x - handle_width//2 - flag_width and event.x <= end_x - handle_width//2 and event.y <= 25):
+        elif self._is_click_on_end_handle(event.x, event.y, end_x):
             self.dragging = 'end'
             self.drag_offset = event.x - end_x
     
