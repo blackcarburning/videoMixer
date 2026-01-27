@@ -11,67 +11,80 @@ import winsound
 import queue
 import random
 import ctypes
+import pygame
 
-# --- NATIVE WINDOWS AUDIO ENGINE ---
+# --- PYGAME AUDIO ENGINE ---
 class NativeAudioEngine:
     def __init__(self):
-        self.alias = "vj_audio"
-        self._mci = ctypes.windll.winmm.mciSendStringW
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         self.is_loaded = False
         self.duration_ms = 0
+        self.start_offset_ms = 0  # Track where we started playing from
+        self.play_start_time = 0  # Track when we started playing
         
-    def _send(self, command):
-        buffer = ctypes.create_unicode_buffer(255)
-        error_code = self._mci(command, buffer, 255, 0)
-        return error_code, buffer.value
-
     def load(self, path):
         self.stop()
         self.close()
-        # Quote path to handle spaces
-        cmd = f'open "{path}" type mpegvideo alias {self.alias}'
-        err, _ = self._send(cmd)
-        if err == 0:
+        try:
+            pygame.mixer.music.load(path)
             self.is_loaded = True
-            self._send(f"set {self.alias} time format milliseconds")
-            _, dur_str = self._send(f"status {self.alias} length")
-            try:
-                self.duration_ms = int(dur_str)
-            except:
-                self.duration_ms = 0
+            # pygame doesn't provide easy duration access, so we keep it at 0
+            # or could use mutagen/other libraries if needed
+            self.duration_ms = 0
             return True
-        return False
+        except Exception as e:
+            print(f"Failed to load audio: {e}")
+            self.is_loaded = False
+            return False
 
     def play(self, from_ms=0):
-        if not self.is_loaded: return
-        cmd = f"play {self.alias} from {int(from_ms)}"
-        self._send(cmd)
+        if not self.is_loaded:
+            return
+        try:
+            # pygame.mixer.music.play takes start position in seconds
+            pygame.mixer.music.play(loops=0, start=from_ms / 1000.0)
+            self.start_offset_ms = from_ms
+            self.play_start_time = time.time()
+        except Exception as e:
+            print(f"Failed to play audio: {e}")
 
     def is_playing(self):
-        if not self.is_loaded: return False
-        _, status = self._send(f"status {self.alias} mode")
-        print(f"MCI status: '{status}'")
-        return status == "playing"
+        if not self.is_loaded:
+            return False
+        return pygame.mixer.music.get_busy()
 
     def get_position(self):
-        if not self.is_loaded: return 0
-        _, pos_str = self._send(f"status {self.alias} position")
-        try:
-            return int(pos_str)
-        except:
+        if not self.is_loaded:
             return 0
+        if not pygame.mixer.music.get_busy():
+            return self.start_offset_ms
+        # pygame.mixer.music.get_pos() returns milliseconds since play started
+        # We need to add the start offset to get the actual position in the file
+        pos_ms = pygame.mixer.music.get_pos()
+        if pos_ms >= 0:
+            return self.start_offset_ms + pos_ms
+        # Fallback if get_pos fails
+        elapsed_time = time.time() - self.play_start_time
+        return self.start_offset_ms + int(elapsed_time * 1000)
 
     def pause(self):
         if self.is_loaded:
-            self._send(f"pause {self.alias}")
+            pygame.mixer.music.pause()
+
+    def unpause(self):
+        if self.is_loaded:
+            pygame.mixer.music.unpause()
 
     def stop(self):
         if self.is_loaded:
-            self._send(f"stop {self.alias}")
-            self._send(f"seek {self.alias} to start")
+            pygame.mixer.music.stop()
+            self.start_offset_ms = 0
 
     def close(self):
-        self._send(f"close {self.alias}")
+        try:
+            pygame.mixer.music.unload()
+        except:
+            pass
         self.is_loaded = False
 
 class AudioChannel:
