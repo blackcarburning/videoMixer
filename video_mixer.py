@@ -804,35 +804,37 @@ class TimelineWidget(tk.Canvas):
                 self.create_line(x, y_min, x, y_max, fill="#00CCFF", width=1)
     
     def draw_grid(self, w, h):
-        """Draw grid lines representing bars."""
+        """Draw grid lines representing beats (with emphasis on bars)."""
         if self.duration_sec <= 0:
             return
         
         bpm = self.mixer.bpm
         beats_per_bar = self.mixer.beats_per_bar
         
-        # Calculate bar duration in seconds
-        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        # Calculate beat duration in seconds
+        beat_duration_sec = 60.0 / bpm
         
-        # Draw vertical lines for each bar
-        bar_num = 0
+        # Draw vertical lines for each beat
+        beat_num = 0
         while True:
-            bar_time_sec = bar_num * bar_duration_sec
-            if bar_time_sec > self.duration_sec:
+            beat_time_sec = beat_num * beat_duration_sec
+            if beat_time_sec > self.duration_sec:
                 break
             
-            x = (bar_time_sec / self.duration_sec) * w
+            x = (beat_time_sec / self.duration_sec) * w
             
-            # Draw bar line
-            color = "#666" if bar_num % 4 == 0 else "#333"
-            width = 2 if bar_num % 4 == 0 else 1
+            # Emphasize bar lines (every beats_per_bar beats)
+            is_bar = (beat_num % beats_per_bar) == 0
+            color = "#666" if is_bar else "#333"
+            width = 2 if is_bar else 1
             self.create_line(x, 0, x, h, fill=color, width=width, tags="grid")
             
-            # Draw bar number
-            if bar_num % 4 == 0:
-                self.create_text(x + 2, 10, text=str(bar_num), fill="#888", anchor="nw", font=("Arial", 8), tags="grid")
+            # Draw beat number (show bar number for bar lines, beat number for others)
+            if is_bar:
+                bar_num = beat_num // beats_per_bar
+                self.create_text(x + 2, 10, text=f"B{bar_num}", fill="#888", anchor="nw", font=("Arial", 8), tags="grid")
             
-            bar_num += 1
+            beat_num += 1
     
     def draw_loop_handles(self, w, h):
         """Draw the loop start and end handles as thick bars with flag markers."""
@@ -840,12 +842,11 @@ class TimelineWidget(tk.Canvas):
             return
         
         bpm = self.mixer.bpm
-        beats_per_bar = self.mixer.beats_per_bar
-        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        beat_duration_sec = 60.0 / bpm
         
-        # Calculate positions
-        start_time_sec = self.mixer.global_loop_start * bar_duration_sec
-        end_time_sec = self.mixer.global_loop_end * bar_duration_sec
+        # Calculate positions (now using beats directly)
+        start_time_sec = self.mixer.global_loop_start * beat_duration_sec
+        end_time_sec = self.mixer.global_loop_end * beat_duration_sec
         
         start_x = (start_time_sec / self.duration_sec) * w
         end_x = (end_time_sec / self.duration_sec) * w
@@ -887,13 +888,11 @@ class TimelineWidget(tk.Canvas):
         # Calculate current playback position from mixer.beat_position
         if hasattr(self.mixer, 'beat_position'):
             beat_pos = self.mixer.beat_position
-            bar_pos = beat_pos / self.mixer.beats_per_bar
             
             bpm = self.mixer.bpm
-            beats_per_bar = self.mixer.beats_per_bar
-            bar_duration_sec = (60.0 / bpm) * beats_per_bar
+            beat_duration_sec = 60.0 / bpm
             
-            time_sec = bar_pos * bar_duration_sec
+            time_sec = beat_pos * beat_duration_sec
             x = (time_sec / self.duration_sec) * w
             
             # Draw playhead line - bright yellow, always visible
@@ -959,12 +958,11 @@ class TimelineWidget(tk.Canvas):
         
         w = self.winfo_width()
         bpm = self.mixer.bpm
-        beats_per_bar = self.mixer.beats_per_bar
-        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        beat_duration_sec = 60.0 / bpm
         
-        # Calculate positions
-        start_time_sec = self.mixer.global_loop_start * bar_duration_sec
-        end_time_sec = self.mixer.global_loop_end * bar_duration_sec
+        # Calculate positions (now using beats)
+        start_time_sec = self.mixer.global_loop_start * beat_duration_sec
+        end_time_sec = self.mixer.global_loop_end * beat_duration_sec
         
         start_x = (start_time_sec / self.duration_sec) * w
         end_x = (end_time_sec / self.duration_sec) * w
@@ -976,39 +974,59 @@ class TimelineWidget(tk.Canvas):
         elif self._is_click_on_end_handle(event.x, event.y, end_x):
             self.dragging = 'end'
             self.drag_offset = event.x - end_x
+        else:
+            # Click on timeline to seek - set playhead position
+            self.dragging = 'seek'
+            # Calculate beat position from click
+            time_sec = (event.x / w) * self.duration_sec
+            beat_pos = time_sec / beat_duration_sec
+            # Snap to nearest beat
+            snapped_beat = max(0, round(beat_pos))
+            
+            # Update the mixer's beat position
+            if hasattr(self.mixer, 'beat_position'):
+                self.mixer.beat_position = snapped_beat
+                # Redraw playhead immediately
+                self.delete("playhead")
+                canvas_width = self.winfo_width()
+                canvas_height = self.winfo_height()
+                self.draw_playhead(canvas_width, canvas_height)
     
     def on_mouse_drag(self, event):
         """Handle mouse drag."""
         if self.dragging is None or self.duration_sec <= 0:
             return
         
+        # Don't drag for seek operations
+        if self.dragging == 'seek':
+            return
+        
         w = self.winfo_width()
         bpm = self.mixer.bpm
-        beats_per_bar = self.mixer.beats_per_bar
-        bar_duration_sec = (60.0 / bpm) * beats_per_bar
+        beat_duration_sec = 60.0 / bpm
         
         # Calculate time position from mouse x
         adjusted_x = event.x - self.drag_offset
         time_sec = (adjusted_x / w) * self.duration_sec
         
-        # Convert to bar position
-        bar_pos = time_sec / bar_duration_sec
+        # Convert to beat position
+        beat_pos = time_sec / beat_duration_sec
         
-        # Snap to nearest bar
-        snapped_bar = round(bar_pos)
-        snapped_bar = max(0, snapped_bar)
+        # Snap to nearest beat
+        snapped_beat = round(beat_pos)
+        snapped_beat = max(0, snapped_beat)
         
         # Update the appropriate loop point
         if self.dragging == 'start':
             # Ensure start < end
-            if snapped_bar < self.mixer.global_loop_end:
-                self.mixer.global_loop_start = snapped_bar
-                self.mixer.gloop_start.set(snapped_bar)
+            if snapped_beat < self.mixer.global_loop_end:
+                self.mixer.global_loop_start = snapped_beat
+                self.mixer.gloop_start.set(snapped_beat)
         elif self.dragging == 'end':
             # Ensure end > start
-            if snapped_bar > self.mixer.global_loop_start:
-                self.mixer.global_loop_end = snapped_bar
-                self.mixer.gloop_end.set(snapped_bar)
+            if snapped_beat > self.mixer.global_loop_start:
+                self.mixer.global_loop_end = snapped_beat
+                self.mixer.gloop_end.set(snapped_beat)
         
         # Redraw loop handles
         canvas_width = self.winfo_width()
@@ -1070,19 +1088,19 @@ class VideoProcessor(threading.Thread):
             total_beats = effective_time * self.mixer.bpm / 60.0
             
             if self.mixer.global_loop_enabled:
-                loop_len_bars = self.mixer.global_loop_end - self.mixer.global_loop_start
-                if loop_len_bars <= 0: loop_len_bars = 4
-                loop_len_beats = loop_len_bars * self.mixer.beats_per_bar
-                start_beats = self.mixer.global_loop_start * self.mixer.beats_per_bar
+                # Loop markers are now in beats
+                loop_len_beats = self.mixer.global_loop_end - self.mixer.global_loop_start
+                if loop_len_beats <= 0: loop_len_beats = 16
+                start_beats = self.mixer.global_loop_start
                 
                 # Simple time-based loop detection
                 # Calculate elapsed time in milliseconds
                 elapsed_ms = (now - st) * 1000.0
                 
-                # Calculate loop boundaries in ms
-                bar_duration_ms = (60.0 / self.mixer.bpm) * self.mixer.beats_per_bar * 1000.0
-                loop_start_ms = self.mixer.global_loop_start * bar_duration_ms
-                loop_end_ms = self.mixer.global_loop_end * bar_duration_ms
+                # Calculate loop boundaries in ms (using beats directly)
+                beat_duration_ms = (60.0 / self.mixer.bpm) * 1000.0
+                loop_start_ms = self.mixer.global_loop_start * beat_duration_ms
+                loop_end_ms = self.mixer.global_loop_end * beat_duration_ms
                 loop_duration_ms = loop_end_ms - loop_start_ms
                 
                 # If we've passed the loop end, jump back
@@ -1158,8 +1176,8 @@ class VideoMixer:
         
         self.audio_track = AudioChannel()
         self.global_loop_enabled = True
-        self.global_loop_start = 0 
-        self.global_loop_end = 4 
+        self.global_loop_start = 0  # Now in beats instead of bars
+        self.global_loop_end = 16   # 4 bars * 4 beats_per_bar = 16 beats
         self.loop_trigger_flag = False
         
         self.bpm = 120.0
@@ -1241,8 +1259,8 @@ class VideoMixer:
         self.global_loop_enabled = True
         self.gloop_start.set(0)
         self.global_loop_start = 0
-        self.gloop_end.set(4)
-        self.global_loop_end = 4
+        self.gloop_end.set(16)  # Reset to 16 beats (4 bars)
+        self.global_loop_end = 16
         self.audio_en.set(True)
         self.audio_track.enabled = True
         self.latency_ms.set(0.0)
@@ -1291,14 +1309,14 @@ class VideoMixer:
         self.mvol = tk.DoubleVar(value=0.5)
         ttk.Scale(row2, from_=0, to=1, variable=self.mvol, command=lambda v: self.metronome.update_volume(float(v)), length=50).pack(side=tk.LEFT)
         
-        ttk.Label(row2, text=" | Loop Bars:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(row2, text=" | Loop Beats:").pack(side=tk.LEFT, padx=5)
         self.gloop_en = tk.BooleanVar(value=True)
         ttk.Checkbutton(row2, variable=self.gloop_en, command=lambda: setattr(self, 'global_loop_enabled', self.gloop_en.get())).pack(side=tk.LEFT)
         self.gloop_start = tk.IntVar(value=0)
-        ttk.Spinbox(row2, from_=0, to=100, textvariable=self.gloop_start, width=3, command=lambda: setattr(self, 'global_loop_start', self.gloop_start.get())).pack(side=tk.LEFT)
+        ttk.Spinbox(row2, from_=0, to=400, textvariable=self.gloop_start, width=3, command=lambda: setattr(self, 'global_loop_start', self.gloop_start.get())).pack(side=tk.LEFT)
         ttk.Label(row2, text="to").pack(side=tk.LEFT)
-        self.gloop_end = tk.IntVar(value=4)
-        ttk.Spinbox(row2, from_=1, to=100, textvariable=self.gloop_end, width=3, command=lambda: setattr(self, 'global_loop_end', self.gloop_end.get())).pack(side=tk.LEFT)
+        self.gloop_end = tk.IntVar(value=16)
+        ttk.Spinbox(row2, from_=1, to=400, textvariable=self.gloop_end, width=3, command=lambda: setattr(self, 'global_loop_end', self.gloop_end.get())).pack(side=tk.LEFT)
         
         ttk.Label(row2, text=" | Audio:").pack(side=tk.LEFT, padx=5)
         self.audio_en = tk.BooleanVar(value=True)
@@ -1410,15 +1428,15 @@ class VideoMixer:
             # Auto-calculate loop end based on audio duration
             duration_ms = self.audio_track.engine.duration_ms
             if duration_ms > 0 and self.bpm > 0 and self.beats_per_bar > 0:
-                # Calculate duration of one bar in seconds
-                bar_duration_sec = (60.0 / self.bpm) * self.beats_per_bar
+                # Calculate duration of one beat in seconds
+                beat_duration_sec = 60.0 / self.bpm
                 # Convert file duration to seconds
                 duration_sec = duration_ms / 1000.0
-                # Round to nearest whole bar, minimum 1 bar
-                num_bars = max(1, round(duration_sec / bar_duration_sec))
-                # Update global_loop_end and UI widget
-                self.global_loop_end = int(num_bars)
-                self.gloop_end.set(int(num_bars))
+                # Round to nearest whole beat, minimum 1 beat
+                num_beats = max(1, round(duration_sec / beat_duration_sec))
+                # Update global_loop_end and UI widget (now in beats)
+                self.global_loop_end = int(num_beats)
+                self.gloop_end.set(int(num_beats))
                 # Trigger timeline redraw to show correct loop region
                 if hasattr(self, 'timeline_widget'):
                     self.timeline_widget.redraw()
@@ -1789,9 +1807,9 @@ class VideoMixer:
         self.audio_track.stop()
         self.loop_trigger_flag = False
         
-        # Calculate start offset in milliseconds based on global_loop_start
-        bar_duration_ms = (60.0 / self.bpm) * self.beats_per_bar * 1000.0
-        loop_start_ms = int(self.global_loop_start * bar_duration_ms)
+        # Calculate start offset in milliseconds based on global_loop_start (now in beats)
+        beat_duration_ms = (60.0 / self.bpm) * 1000.0
+        loop_start_ms = int(self.global_loop_start * beat_duration_ms)
         
         audio_started = False
         if self.audio_track.enabled and self.audio_track.path:
@@ -1805,8 +1823,8 @@ class VideoMixer:
         
         self.start_time = time.perf_counter()
         self.last_update_time = self.start_time
-        # Start beat position at global_loop_start beats
-        self.beat_position = self.global_loop_start * self.beats_per_bar
+        # Start beat position at global_loop_start beats (already in beats now)
+        self.beat_position = self.global_loop_start
         
         self.metronome.synchronized_start(self.start_time)
         self.processor.start_proc(self.start_time)
@@ -1857,7 +1875,7 @@ class VideoMixer:
         if fd:
             blended, bp = fd
             self.beat_position = bp
-            self.beat_var.set(f"Beat: {bp:.1f}")
+            self.beat_var.set(f"Beat: {int(round(bp))}")
             self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
             rgb = blended[:, :, ::-1]
             img = Image.fromarray(rgb)
