@@ -672,25 +672,18 @@ class SequencerWidget(tk.Canvas):
             self.itemconfigure(r, fill=self.colors[val])
 
 class TimelineWidget(tk.Canvas):
-    """Interactive timeline widget with waveform visualization and draggable loop points."""
+    """Interactive timeline widget with professional waveform visualization and draggable loop points."""
     
     def __init__(self, parent, mixer):
         super().__init__(parent, height=120, bg="#1a1a1a", highlightthickness=1, highlightbackground="#555")
         self.mixer = mixer
-        self.waveform_data = None
+        self.waveform_samples = None  # Raw normalized samples
         self.sample_rate = 44100
         self.duration_sec = 0
         
         # Dragging state
         self.dragging = None  # 'start', 'end', or None
         self.drag_offset = 0
-        
-        # Visual elements
-        self.waveform_lines = []
-        self.grid_lines = []
-        self.loop_start_handle = None
-        self.loop_end_handle = None
-        self.playhead_line = None
         
         # Bind mouse events
         self.bind("<Button-1>", self.on_mouse_down)
@@ -708,7 +701,7 @@ class TimelineWidget(tk.Canvas):
         self.create_text(w // 2, h // 2, text="No Audio Loaded", fill="#666", font=("Arial", 12))
     
     def load_audio_waveform(self, audio_path):
-        """Extract and cache waveform data from audio file."""
+        """Extract and cache waveform data from audio file using min/max approach."""
         try:
             # Load audio as a pygame Sound object to extract samples
             sound = pygame.mixer.Sound(audio_path)
@@ -727,23 +720,22 @@ class TimelineWidget(tk.Canvas):
             if max_abs_sample > 0:
                 samples = samples / max_abs_sample
             
-            # Downsample for visualization (keep every Nth sample based on duration)
-            target_points = 2000  # Number of points to display
-            step = max(1, len(samples) // target_points)
-            self.waveform_data = samples[::step]
+            # Store raw samples for min/max rendering
+            self.waveform_samples = samples
             
             self.redraw()
             
         except Exception as e:
             print(f"Failed to load waveform: {e}")
-            self.waveform_data = None
+            self.waveform_samples = None
+            self.duration_sec = 0
             self.draw_empty()
     
     def redraw(self):
         """Redraw the entire timeline."""
         self.delete("all")
         
-        if self.waveform_data is None or len(self.waveform_data) == 0:
+        if self.waveform_samples is None or len(self.waveform_samples) == 0:
             self.draw_empty()
             return
         
@@ -762,28 +754,51 @@ class TimelineWidget(tk.Canvas):
         # Draw loop handles
         self.draw_loop_handles(w, h)
         
-        # Draw playhead
+        # Draw playhead (always, even when paused)
         self.draw_playhead(w, h)
     
     def draw_waveform(self, w, h):
-        """Draw the audio waveform."""
-        if self.waveform_data is None:
+        """Draw the audio waveform using min/max rendering for professional look."""
+        if self.waveform_samples is None:
             return
         
+        # Dark background
+        self.create_rectangle(0, 0, w, h, fill="#0a0a0a", outline="")
+        
+        # Center zero-line
         mid_y = h // 2
-        amp_scale = (h // 2) * 0.8
+        self.create_line(0, mid_y, w, mid_y, fill="#333333", width=1)
         
-        # Draw waveform as lines
-        num_points = len(self.waveform_data)
-        x_step = w / max(1, num_points - 1)
+        # Scale for amplitude
+        amp_scale = (h // 2) * 0.85
         
-        for i in range(num_points - 1):
-            x1 = i * x_step
-            x2 = (i + 1) * x_step
-            y1 = mid_y - self.waveform_data[i] * amp_scale
-            y2 = mid_y - self.waveform_data[i + 1] * amp_scale
+        # Min/Max rendering: for each pixel column, find min/max samples
+        samples = self.waveform_samples
+        step = len(samples) / max(1, w)
+        
+        for x in range(w):
+            idx_start = int(x * step)
+            idx_end = int((x + 1) * step)
             
-            self.create_line(x1, y1, x2, y2, fill="#4488ff", width=1)
+            # Ensure we don't go out of bounds
+            idx_end = min(idx_end, len(samples))
+            
+            if idx_start >= len(samples):
+                break
+                
+            # Get chunk of samples for this pixel column
+            chunk = samples[idx_start:idx_end]
+            
+            if len(chunk) > 0:
+                min_v = np.min(chunk)
+                max_v = np.max(chunk)
+                
+                # Calculate y coordinates (inverted because canvas y increases downward)
+                y_min = mid_y - (max_v * amp_scale)
+                y_max = mid_y - (min_v * amp_scale)
+                
+                # Draw vertical line from min to max (creates solid waveform)
+                self.create_line(x, y_min, x, y_max, fill="#00CCFF", width=1)
     
     def draw_grid(self, w, h):
         """Draw grid lines representing bars."""
@@ -806,18 +821,18 @@ class TimelineWidget(tk.Canvas):
             x = (bar_time_sec / self.duration_sec) * w
             
             # Draw bar line
-            color = "#888" if bar_num % 4 == 0 else "#444"
+            color = "#666" if bar_num % 4 == 0 else "#333"
             width = 2 if bar_num % 4 == 0 else 1
             self.create_line(x, 0, x, h, fill=color, width=width, tags="grid")
             
             # Draw bar number
             if bar_num % 4 == 0:
-                self.create_text(x + 2, 10, text=str(bar_num), fill="#aaa", anchor="nw", font=("Arial", 8), tags="grid")
+                self.create_text(x + 2, 10, text=str(bar_num), fill="#888", anchor="nw", font=("Arial", 8), tags="grid")
             
             bar_num += 1
     
     def draw_loop_handles(self, w, h):
-        """Draw the loop start and end handles."""
+        """Draw the loop start and end handles as thick bars with flag markers."""
         if self.duration_sec <= 0:
             return
         
@@ -833,21 +848,63 @@ class TimelineWidget(tk.Canvas):
         end_x = (end_time_sec / self.duration_sec) * w
         
         # Draw loop region (shaded area)
-        self.create_rectangle(start_x, 0, end_x, h, fill="#00ff0020", outline="", tags="loop_region")
+        self.create_rectangle(start_x, 0, end_x, h, fill="#00ff0015", outline="", tags="loop_region")
         
-        # Draw start handle
-        self.loop_start_handle = self.create_line(start_x, 0, start_x, h, fill="#00ff00", width=3, tags="loop_start")
-        self.create_text(start_x + 3, 25, text=f"Start: {self.mixer.global_loop_start}", 
-                        fill="#00ff00", anchor="nw", font=("Arial", 9, "bold"), tags="loop_start")
+        # Draw START handle - thick green bar with flag
+        handle_width = 8
+        flag_width = 40
+        flag_height = 20
         
-        # Draw end handle
-        self.loop_end_handle = self.create_line(end_x, 0, end_x, h, fill="#ff0000", width=3, tags="loop_end")
-        self.create_text(end_x + 3, 40, text=f"End: {self.mixer.global_loop_end}", 
-                        fill="#ff0000", anchor="nw", font=("Arial", 9, "bold"), tags="loop_end")
+        # Start handle bar
+        self.create_rectangle(start_x - handle_width//2, 0, start_x + handle_width//2, h, 
+                             fill="#00ff00", outline="", tags="loop_start")
+        
+        # Start flag at top
+        self.create_rectangle(start_x + handle_width//2, 5, start_x + handle_width//2 + flag_width, 5 + flag_height,
+                             fill="#00ff00", outline="", tags="loop_start")
+        self.create_text(start_x + handle_width//2 + flag_width//2, 5 + flag_height//2, 
+                        text="S", fill="#000000", font=("Arial", 12, "bold"), tags="loop_start")
+        
+        # Draw END handle - thick red bar with flag
+        # End handle bar
+        self.create_rectangle(end_x - handle_width//2, 0, end_x + handle_width//2, h,
+                             fill="#ff0000", outline="", tags="loop_end")
+        
+        # End flag at top
+        self.create_rectangle(end_x - handle_width//2 - flag_width, 5, end_x - handle_width//2, 5 + flag_height,
+                             fill="#ff0000", outline="", tags="loop_end")
+        self.create_text(end_x - handle_width//2 - flag_width//2, 5 + flag_height//2,
+                        text="E", fill="#000000", font=("Arial", 12, "bold"), tags="loop_end")
     
     def draw_playhead(self, w, h):
-        """Draw the current playback position."""
-        if not self.mixer.playing or self.duration_sec <= 0:
+        """Draw the current playback position - ALWAYS visible."""
+        if self.duration_sec <= 0:
+            return
+        
+        # Calculate current playback position from mixer.beat_position
+        if hasattr(self.mixer, 'beat_position'):
+            beat_pos = self.mixer.beat_position
+            bar_pos = beat_pos / self.mixer.beats_per_bar
+            
+            bpm = self.mixer.bpm
+            beats_per_bar = self.mixer.beats_per_bar
+            bar_duration_sec = (60.0 / bpm) * beats_per_bar
+            
+            time_sec = bar_pos * bar_duration_sec
+            x = (time_sec / self.duration_sec) * w
+            
+            # Draw playhead line - bright yellow, always visible
+            self.create_line(x, 0, x, h, fill="#ffff00", width=3, tags="playhead")
+    
+    def update_playhead(self):
+        """Update only the playhead position (called frequently during playback)."""
+        if self.duration_sec <= 0:
+            return
+        
+        w = self.winfo_width()
+        h = self.winfo_height()
+        
+        if w <= 1 or h <= 1:
             return
         
         # Calculate current playback position
@@ -862,40 +919,12 @@ class TimelineWidget(tk.Canvas):
             time_sec = bar_pos * bar_duration_sec
             x = (time_sec / self.duration_sec) * w
             
-            # Draw playhead line
-            self.playhead_line = self.create_line(x, 0, x, h, fill="#ffff00", width=2, tags="playhead")
-    
-    def update_playhead(self):
-        """Update only the playhead position (called frequently during playback)."""
-        if not self.mixer.playing or self.duration_sec <= 0:
-            if self.playhead_line:
-                self.delete("playhead")
-                self.playhead_line = None
-            return
-        
-        w = self.winfo_width()
-        h = self.winfo_height()
-        
-        if w <= 1 or h <= 1:
-            return
-        
-        # Calculate current playback position
-        beat_pos = self.mixer.beat_position
-        bar_pos = beat_pos / self.mixer.beats_per_bar
-        
-        bpm = self.mixer.bpm
-        beats_per_bar = self.mixer.beats_per_bar
-        bar_duration_sec = (60.0 / bpm) * beats_per_bar
-        
-        time_sec = bar_pos * bar_duration_sec
-        x = (time_sec / self.duration_sec) * w
-        
-        # Update playhead position
-        self.delete("playhead")
-        self.playhead_line = self.create_line(x, 0, x, h, fill="#ffff00", width=2, tags="playhead")
+            # Update playhead position
+            self.delete("playhead")
+            self.create_line(x, 0, x, h, fill="#ffff00", width=3, tags="playhead")
     
     def on_mouse_down(self, event):
-        """Handle mouse button press."""
+        """Handle mouse button press with improved wider handle detection."""
         if self.duration_sec <= 0:
             return
         
@@ -911,13 +940,15 @@ class TimelineWidget(tk.Canvas):
         start_x = (start_time_sec / self.duration_sec) * w
         end_x = (end_time_sec / self.duration_sec) * w
         
-        # Check if clicked near start or end handle
-        click_tolerance = 10
+        # Improved click tolerance - use wider handle area
+        handle_width = 8
+        flag_width = 40
+        click_tolerance = max(handle_width, 15)
         
-        if abs(event.x - start_x) < click_tolerance:
+        if abs(event.x - start_x) < click_tolerance or (event.x >= start_x + handle_width//2 and event.x <= start_x + handle_width//2 + flag_width and event.y <= 25):
             self.dragging = 'start'
             self.drag_offset = event.x - start_x
-        elif abs(event.x - end_x) < click_tolerance:
+        elif abs(event.x - end_x) < click_tolerance or (event.x >= end_x - handle_width//2 - flag_width and event.x <= end_x - handle_width//2 and event.y <= 25):
             self.dragging = 'end'
             self.drag_offset = event.x - end_x
     
