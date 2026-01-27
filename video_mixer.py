@@ -16,7 +16,9 @@ import pygame
 # --- PYGAME AUDIO ENGINE ---
 class NativeAudioEngine:
     def __init__(self):
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+        # Initialize pygame.mixer only if not already initialized
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         self.is_loaded = False
         self.duration_ms = 0
         self.is_paused = False
@@ -69,9 +71,14 @@ class NativeAudioEngine:
 
     def pause(self):
         if self.is_loaded and not self.is_paused:
+            # Calculate current position before pausing
+            try:
+                pos_sec = pygame.mixer.music.get_pos() / 1000.0
+                self.pause_time_ms = int(self.start_time_ms + pos_sec * 1000)
+            except:
+                self.pause_time_ms = 0
             pygame.mixer.music.pause()
             self.is_paused = True
-            self.pause_time_ms = self.get_position()
 
     def unpause(self):
         if self.is_loaded and self.is_paused:
