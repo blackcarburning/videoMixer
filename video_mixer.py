@@ -829,7 +829,7 @@ class TimelineWidget(tk.Canvas):
             width = 2 if is_bar else 1
             self.create_line(x, 0, x, h, fill=color, width=width, tags="grid")
             
-            # Draw beat number (show bar number for bar lines, beat number for others)
+            # Draw bar number labels for bar lines
             if is_bar:
                 bar_num = beat_num // beats_per_bar
                 self.create_text(x + 2, 10, text=f"B{bar_num}", fill="#888", anchor="nw", font=("Arial", 8), tags="grid")
@@ -975,9 +975,8 @@ class TimelineWidget(tk.Canvas):
             self.dragging = 'end'
             self.drag_offset = event.x - end_x
         else:
-            # Click on timeline to seek - set playhead position
-            self.dragging = 'seek'
-            # Calculate beat position from click
+            # Click on timeline to seek - set playhead position immediately
+            # (no dragging involved for seek operation)
             time_sec = (event.x / w) * self.duration_sec
             beat_pos = time_sec / beat_duration_sec
             # Snap to nearest beat
@@ -993,12 +992,8 @@ class TimelineWidget(tk.Canvas):
                 self.draw_playhead(canvas_width, canvas_height)
     
     def on_mouse_drag(self, event):
-        """Handle mouse drag."""
+        """Handle mouse drag for loop handle dragging only."""
         if self.dragging is None or self.duration_sec <= 0:
-            return
-        
-        # Don't drag for seek operations
-        if self.dragging == 'seek':
             return
         
         w = self.winfo_width()
