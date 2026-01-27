@@ -782,15 +782,18 @@ class VideoChannel:
             if not frame.flags['WRITEABLE']:
                 frame = frame.copy()
             
-            # Simple RGB distance-based color key (much faster than HSV)
-            target = np.array(self.colorkey_color, dtype=np.float32)
+            # Simple RGB distance-based color key (much faster than HSV, trades perceptual accuracy for speed)
+            # Convert target color from RGB (user input) to BGR (OpenCV format)
+            target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
+            target = np.array(target_bgr, dtype=np.float32)
             
             # Calculate color distance for each pixel
             diff = frame - target[np.newaxis, np.newaxis, :]
             distance = np.sqrt(np.sum(diff * diff, axis=2))
             
             # Create mask based on tolerance
-            max_distance = self.colorkey_tolerance * 1.732  # sqrt(3) for RGB space diagonal
+            # Scale tolerance by sqrt(3) to normalize to RGB space diagonal (0,0,0) to (1,1,1)
+            max_distance = self.colorkey_tolerance * 1.732
             mask = (distance <= max_distance).astype(np.float32)
             
             # Apply mask - keep matching pixels, make others black
@@ -1428,9 +1431,6 @@ class VideoMixer:
         if hasattr(self, 'preview_photo') and self.preview_photo:
             # Get the blended output image
             try:
-                # Get color from the last rendered frame
-                from PIL import ImageTk, Image
-                # The preview_photo is a PhotoImage, we need to access the underlying image
                 # Get from blend_buffer which is the last rendered frame
                 if hasattr(self, 'blend_buffer') and self.blend_buffer is not None:
                     h, w = self.blend_buffer.shape[:2]
@@ -1440,16 +1440,18 @@ class VideoMixer:
                     buf_x = max(0, min(w-1, buf_x))
                     buf_y = max(0, min(h-1, buf_y))
                     
-                    # Get RGB values (already in 0-1 range)
+                    # Get RGB values (convert from blend_buffer BGR format to colorkey_color RGB format)
                     color = self.blend_buffer[buf_y, buf_x]
                     
                     # Set color on the active channel
                     if hasattr(self, 'eyedropper_channel'):
-                        self.eyedropper_channel.colorkey_color = [float(color[2]), float(color[1]), float(color[0])]  # BGR to RGB
+                        self.eyedropper_channel.colorkey_color = [float(color[2]), float(color[1]), float(color[0])]
+                        
+                        # Calculate RGB tuple for UI update and status message
+                        rgb = tuple(int(c*255) for c in self.eyedropper_channel.colorkey_color)
                         
                         # Update UI button color
                         if hasattr(self, 'eyedropper_controls') and 'colorkey_btn' in self.eyedropper_controls:
-                            rgb = tuple(int(c*255) for c in self.eyedropper_channel.colorkey_color)
                             self.eyedropper_controls['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
                         
                         self.status.set(f"Color picked: RGB({rgb[0]}, {rgb[1]}, {rgb[2]})")
