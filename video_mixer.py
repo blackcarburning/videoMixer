@@ -1406,6 +1406,23 @@ class VideoMixer:
         if self.audio_track.load(p):
             self.audio_status.set(os.path.basename(p)[:10])
             self.status.set(f"Audio Loaded: {os.path.basename(p)}")
+            
+            # Auto-calculate loop end based on audio duration
+            duration_ms = self.audio_track.engine.duration_ms
+            if duration_ms > 0:
+                # Calculate duration of one bar in seconds
+                bar_duration_sec = (60.0 / self.bpm) * self.beats_per_bar
+                # Convert file duration to seconds
+                duration_sec = duration_ms / 1000.0
+                # Round to nearest whole bar
+                num_bars = round(duration_sec / bar_duration_sec)
+                if num_bars > 0:
+                    # Update global_loop_end and UI widget
+                    self.global_loop_end = num_bars
+                    self.gloop_end.set(num_bars)
+                    # Trigger timeline redraw to show correct loop region
+                    if hasattr(self, 'timeline_widget'):
+                        self.timeline_widget.redraw()
 
     def setup_channel(self, parent, ch, title):
         c = {}
