@@ -195,6 +195,8 @@ class Modulator:
         self.pos_only = False
         self.neg_only = False
         self.invert = False
+        self.fwd_only = False
+        self.rev_only = False
         
     def get_value(self, beat_position):
         if not self.enabled or self.depth == 0:
@@ -217,12 +219,20 @@ class Modulator:
         if self.invert: value = -value
         if self.pos_only: value = max(0, value)
         elif self.neg_only: value = min(0, value)
+        
+        # Apply direction limiters (for speed modulator)
+        if self.fwd_only:
+            value = max(0, value)
+        elif self.rev_only:
+            value = min(0, value)
+        
         return value * self.depth
     
     def to_dict(self):
         return {'wave_type': self.wave_type, 'rate': self.rate, 'depth': self.depth, 
                 'phase': self.phase, 'enabled': self.enabled, 'pos_only': self.pos_only, 
-                'neg_only': self.neg_only, 'invert': self.invert}
+                'neg_only': self.neg_only, 'invert': self.invert, 'fwd_only': self.fwd_only, 
+                'rev_only': self.rev_only}
     
     def from_dict(self, d):
         self.wave_type = d.get('wave_type', 'sine')
@@ -233,6 +243,8 @@ class Modulator:
         self.pos_only = d.get('pos_only', False)
         self.neg_only = d.get('neg_only', False)
         self.invert = d.get('invert', False)
+        self.fwd_only = d.get('fwd_only', False)
+        self.rev_only = d.get('rev_only', False)
     
     def reset(self):
         self.wave_type = "sine"
@@ -243,6 +255,8 @@ class Modulator:
         self.pos_only = False
         self.neg_only = False
         self.invert = False
+        self.fwd_only = False
+        self.rev_only = False
 
 class VideoChannel:
     SPEED_OPTIONS = {"1/6": 1/6, "1/4": 0.25, "1/3": 1/3, "1/2": 0.5, "2/3": 2/3, "3/4": 0.75,
@@ -455,7 +469,7 @@ class VideoChannel:
         # Get modulator value (-depth to +depth) and map to 0.2-0.8 range
         mod_value = self.mirror_center_mod.get_value(beat_pos) if self.mirror_center_mod.enabled else 0.0
         # Map from [-depth, +depth] to [0.2, 0.8]
-        center_offset = 0.5 + mod_value  # Now ranges from (0.5 - depth) to (0.5 + depth)
+        center_offset = 0.5 + mod_value * 0.3  # Maps to 0.2-0.8 range with depth=0.3
         # Clamp to 0.2 - 0.8 range
         center_offset = max(0.2, min(0.8, center_offset))
         
@@ -464,23 +478,30 @@ class VideoChannel:
         if self.mirror_mode == "Horizontal":
             split_x = int(w * center_offset)
             left = frame[:, :split_x]
-            return np.hstack([left, cv2.flip(left, 1)])
+            # Resize left portion to half width, then mirror
+            left_resized = cv2.resize(left, (w//2, h), interpolation=cv2.INTER_LINEAR)
+            return np.hstack([left_resized, cv2.flip(left_resized, 1)])
         elif self.mirror_mode == "Vertical":
             split_y = int(h * center_offset)
             top = frame[:split_y, :]
-            return np.vstack([top, cv2.flip(top, 0)])
+            # Resize top portion to half height, then mirror
+            top_resized = cv2.resize(top, (w, h//2), interpolation=cv2.INTER_LINEAR)
+            return np.vstack([top_resized, cv2.flip(top_resized, 0)])
         elif self.mirror_mode == "Quad":
             split_y = int(h * center_offset)
             split_x = int(w * center_offset)
             q = frame[:split_y, :split_x]
-            top = np.hstack([q, cv2.flip(q, 1)])
+            # Resize to quarter size
+            q_resized = cv2.resize(q, (w//2, h//2), interpolation=cv2.INTER_LINEAR)
+            top = np.hstack([q_resized, cv2.flip(q_resized, 1)])
             return np.vstack([top, cv2.flip(top, 0)])
         elif self.mirror_mode == "Kaleido":
             split_y = int(h * center_offset)
             split_x = int(w * center_offset)
             q = frame[:split_y, :split_x]
-            q_flip = cv2.flip(q, 1)
-            top = np.hstack([q, q_flip])
+            q_resized = cv2.resize(q, (w//2, h//2), interpolation=cv2.INTER_LINEAR)
+            q_flip = cv2.flip(q_resized, 1)
+            top = np.hstack([q_resized, q_flip])
             bot = cv2.flip(top, 0)
             return np.vstack([top, bot])
         return frame
@@ -1529,6 +1550,11 @@ class VideoMixer:
         srow2.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(srow2, text="Speed Mod:", font=("Arial", 8)).pack(side=tk.LEFT)
         c['speed_mod'] = self.setup_mod_simple(srow2, ch.speed_mod, "On")
+        mf = c['speed_mod']['_frame']
+        c['spd_fwd'] = tk.BooleanVar(value=False)
+        c['spd_rev'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text="Fwd", variable=c['spd_fwd'], command=lambda: self._set_speed_dir(ch.speed_mod, c, 'fwd')).pack(side=tk.LEFT)
+        ttk.Checkbutton(mf, text="Rev", variable=c['spd_rev'], command=lambda: self._set_speed_dir(ch.speed_mod, c, 'rev')).pack(side=tk.LEFT)
         lf = ttk.LabelFrame(tab_loop, text="Beat Loop", padding="3")
         lf.pack(fill=tk.X, pady=5)
         lrow = ttk.Frame(lf)
@@ -1624,6 +1650,7 @@ class VideoMixer:
         c = {}
         mf = ttk.Frame(parent)
         mf.pack(side=tk.LEFT, padx=2)
+        c['_frame'] = mf
         c['en'] = tk.BooleanVar(value=False)
         ttk.Checkbutton(mf, text=label, variable=c['en'], command=lambda: setattr(mod, 'enabled', c['en'].get())).pack(side=tk.LEFT)
         c['wv'] = tk.StringVar(value="sine")
@@ -1677,6 +1704,18 @@ class VideoMixer:
             if mod.neg_only:
                 mod.pos_only = False
                 c['pos'].set(False)
+    
+    def _set_speed_dir(self, mod, c, which):
+        if which == 'fwd':
+            mod.fwd_only = c['spd_fwd'].get()
+            if mod.fwd_only:
+                c['spd_rev'].set(False)
+                mod.rev_only = False
+        elif which == 'rev':
+            mod.rev_only = c['spd_rev'].get()
+            if mod.rev_only:
+                c['spd_fwd'].set(False)
+                mod.fwd_only = False
     
     def on_ls(self, ch, c):
         v = int(float(c['bl_start'].get()))
@@ -1758,6 +1797,10 @@ class VideoMixer:
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
             mc['dp'].set(m.depth)
             mc['inv'].set(m.invert)
+        if 'spd_fwd' in c:
+            c['spd_fwd'].set(ch.speed_mod.fwd_only)
+        if 'spd_rev' in c:
+            c['spd_rev'].set(ch.speed_mod.rev_only)
         c['seq_gate_w'].update_ui()
         c['seq_stutter_w'].update_ui()
         c['seq_speed_w'].update_ui()
