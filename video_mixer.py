@@ -1,3 +1,4 @@
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
@@ -334,9 +335,6 @@ class VideoChannel:
         self.slicer_mod.wave_type = "square"
         self.slicer_mod.rate = 2.0
         self.slicer_mod.depth = 1.0
-        self.colorkey_enabled = False
-        self.colorkey_color = [0.0, 1.0, 0.0]  # Default green in RGB (0-1 range)
-        self.colorkey_tolerance = 0.3
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -368,9 +366,6 @@ class VideoChannel:
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
              'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
              'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
-             'colorkey_enabled': self.colorkey_enabled, 
-             'colorkey_color': self.colorkey_color, 
-             'colorkey_tolerance': self.colorkey_tolerance,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
              'beat_loop_enabled': self.beat_loop_enabled, 
@@ -405,9 +400,6 @@ class VideoChannel:
             self.mosh_amount = d.get('mosh_amount', 0.0)
             self.echo_amount = d.get('echo_amount', 0.0)
             self.slicer_amount = d.get('slicer_amount', 0.0)
-            self.colorkey_enabled = d.get('colorkey_enabled', False)
-            self.colorkey_color = d.get('colorkey_color', [0.0, 1.0, 0.0])
-            self.colorkey_tolerance = d.get('colorkey_tolerance', 0.3)
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -465,9 +457,6 @@ class VideoChannel:
             self.mosh_amount = 0.0
             self.echo_amount = 0.0
             self.slicer_amount = 0.0
-            self.colorkey_enabled = False
-            self.colorkey_color = [0.0, 1.0, 0.0]
-            self.colorkey_tolerance = 0.3
             self.seq_gate = [1] * 16
             self.seq_stutter = [0] * 16
             self.seq_speed = [0] * 16
@@ -742,17 +731,15 @@ class VideoChannel:
             effective_echo = self.echo_amount * mod_val
 
         if effective_echo > 0.01:
-            if not frame.flags['WRITEABLE']:
-                frame = frame.copy()
+            frame = frame.copy()
             if self.echo_buffer is None or self.echo_buffer.shape != frame.shape:
-                self.echo_buffer = frame.astype(np.float32)
+                self.echo_buffer = frame.copy()
             else:
-                # Decay echo buffer and blend with current frame
-                echo_decay = 0.85  # How much echo persists
-                self.echo_buffer = self.echo_buffer * echo_decay + frame * (1.0 - echo_decay)
-            # Mix current frame with echo buffer based on effect amount
-            frame = frame * (1.0 - effective_echo * 0.6) + self.echo_buffer * (effective_echo * 0.6)
-            frame = np.clip(frame, 0, 1)  # Ensure values stay in valid range
+                # Blend with echo buffer (stronger persistence than mosh)
+                alpha = 1.0 - (effective_echo * 0.7)  # Max 70% echo retention
+                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.7, 0)
+            # Layer current frame over echo
+            frame = cv2.addWeighted(frame, 0.6, self.echo_buffer, 0.4, 0)
 
         # Slicer effect - creates scanline displacement glitches
         effective_slicer = self.slicer_amount
@@ -776,29 +763,6 @@ class VideoChannel:
                     if random.random() < effective_slicer:
                         frame[y_start:y_end, :] = self.slicer_buffer[y_start:y_end, :]
                 self.slicer_buffer = frame.copy()
-
-        # Color Key filter - only show pixels matching target color
-        if self.colorkey_enabled and self.colorkey_tolerance >= 0:
-            if not frame.flags['WRITEABLE']:
-                frame = frame.copy()
-            
-            # Convert target color from RGB (user input) to BGR (OpenCV format)
-            target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
-            target = np.array(target_bgr, dtype=np.float32)
-            
-            # Calculate absolute color difference for each pixel
-            diff = np.abs(frame - target[np.newaxis, np.newaxis, :])
-            
-            # Use max difference across channels (Chebyshev distance)
-            # This is more intuitive than Euclidean: tolerance directly maps to 
-            # "max allowed difference in any RGB channel" (e.g., 0.3 = 30% variation)
-            max_diff = np.max(diff, axis=2)
-            
-            # Create mask based on tolerance
-            mask = (max_diff <= self.colorkey_tolerance).astype(np.float32)
-            
-            # Apply mask - keep matching pixels, make others black
-            frame = frame * mask[:, :, np.newaxis]
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1412,57 +1376,6 @@ class VideoMixer:
         if self.audio_track.enabled:
             self.audio_track.play(0)
 
-    def enable_eyedropper(self, ch, c):
-        """Enable eyedropper mode to pick color from video preview"""
-        self.eyedropper_active = True
-        self.eyedropper_channel = ch
-        self.eyedropper_controls = c
-        self.preview_canvas.config(cursor="crosshair")
-        self.status.set("Click on preview to pick color...")
-        
-    def on_preview_click(self, event):
-        """Handle click on preview canvas for eyedropper"""
-        if not hasattr(self, 'eyedropper_active') or not self.eyedropper_active:
-            return
-        
-        # Get pixel color from preview image
-        x, y = event.x, event.y
-        
-        # Determine which channel owns the preview
-        if hasattr(self, 'preview_photo') and self.preview_photo:
-            # Get the blended output image
-            try:
-                # Get from blend_buffer which is the last rendered frame
-                if hasattr(self, 'blend_buffer') and self.blend_buffer is not None:
-                    h, w = self.blend_buffer.shape[:2]
-                    # Scale click coordinates to buffer size
-                    buf_x = int((x / self.preview_width) * w)
-                    buf_y = int((y / self.preview_height) * h)
-                    buf_x = max(0, min(w-1, buf_x))
-                    buf_y = max(0, min(h-1, buf_y))
-                    
-                    # Get RGB values (convert from blend_buffer BGR format to colorkey_color RGB format)
-                    color = self.blend_buffer[buf_y, buf_x]
-                    
-                    # Set color on the active channel
-                    if hasattr(self, 'eyedropper_channel'):
-                        self.eyedropper_channel.colorkey_color = [float(color[2]), float(color[1]), float(color[0])]
-                        
-                        # Calculate RGB tuple for UI update and status message
-                        rgb = tuple(int(c*255) for c in self.eyedropper_channel.colorkey_color)
-                        
-                        # Update UI button color
-                        if hasattr(self, 'eyedropper_controls') and 'colorkey_btn' in self.eyedropper_controls:
-                            self.eyedropper_controls['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
-                        
-                        self.status.set(f"Color picked: RGB({rgb[0]}, {rgb[1]}, {rgb[2]})")
-            except Exception as e:
-                self.status.set(f"Error picking color: {e}")
-        
-        # Disable eyedropper mode
-        self.eyedropper_active = False
-        self.preview_canvas.config(cursor="")
-
     def reset_mod(self, c):
         c['en'].set(False)
         c['wv'].set("sine")
@@ -1534,8 +1447,6 @@ class VideoMixer:
         pf.pack(side=tk.LEFT, padx=(0, 10))
         self.preview_canvas = tk.Canvas(pf, width=self.preview_width, height=self.preview_height, bg="black")
         self.preview_canvas.pack()
-        self.preview_canvas.bind("<Button-1>", self.on_preview_click)
-        self.eyedropper_active = False
         tf = ttk.LabelFrame(top, text="Transport", padding="5")
         tf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
@@ -1820,23 +1731,6 @@ class VideoMixer:
         c['slicer'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_slicer, from_=0.0, to=1.0, variable=c['slicer'], length=80, command=lambda v, ch=ch: setattr(ch, 'slicer_amount', float(v))).pack(side=tk.LEFT)
         c['slicer_mod'] = self.setup_mod_simple(fr_slicer, ch.slicer_mod, "LFO")
-        
-        fr_colorkey = ttk.Frame(tab_fx)
-        fr_colorkey.pack(fill=tk.X, pady=2)
-        c['colorkey_en'] = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fr_colorkey, text="ColorKey", variable=c['colorkey_en'], 
-                        command=lambda: setattr(ch, 'colorkey_enabled', c['colorkey_en'].get())).pack(side=tk.LEFT)
-
-        # Eyedropper button to pick color from video
-        c['colorkey_btn'] = tk.Button(fr_colorkey, text="Pick", width=5, bg='#00ff00',
-                                       command=lambda: self.enable_eyedropper(ch, c))
-        c['colorkey_btn'].pack(side=tk.LEFT, padx=2)
-
-        ttk.Label(fr_colorkey, text="Tol:").pack(side=tk.LEFT, padx=(5,2))
-        c['colorkey_tol'] = tk.DoubleVar(value=0.3)
-        ttk.Scale(fr_colorkey, from_=0.0, to=1.0, variable=c['colorkey_tol'], length=60,
-                  command=lambda v, ch=ch: setattr(ch, 'colorkey_tolerance', float(v))).pack(side=tk.LEFT)
-        
         fr_post = ttk.Frame(tab_fx)
         fr_post.pack(fill=tk.X, pady=2)
         ttk.Label(fr_post, text="Postrz:").pack(side=tk.LEFT)
@@ -2006,12 +1900,6 @@ class VideoMixer:
         c['mosh'].set(ch.mosh_amount)
         c['echo'].set(ch.echo_amount)
         c['slicer'].set(ch.slicer_amount)
-        c['colorkey_en'].set(ch.colorkey_enabled)
-        c['colorkey_tol'].set(ch.colorkey_tolerance)
-        # Update color button background
-        if ch.colorkey_color is not None:
-            rgb = tuple(int(c*255) for c in ch.colorkey_color)
-            c['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
         c['bl_en'].set(ch.beat_loop_enabled)
         for label, val in VideoChannel.LOOP_LENGTH_OPTIONS.items():
              if abs(val - ch.loop_length_beats) < 0.001:
