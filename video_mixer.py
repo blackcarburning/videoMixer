@@ -306,6 +306,10 @@ class VideoChannel:
         self.blur_mod = Modulator()
         self.zoom_mod = Modulator()
         self.pixel_mod = Modulator()
+        self.chroma_mod = Modulator()
+        self.chroma_mod.wave_type = "sine"
+        self.chroma_mod.rate = 1.0
+        self.chroma_mod.depth = 0.5
         self.mirror_center_mod = Modulator()
         self.mirror_center_mod.wave_type = "triangle"
         self.mirror_center_mod.rate = 0.5
@@ -351,6 +355,7 @@ class VideoChannel:
              'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
              'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
              'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict(),
+             'chroma_mod': self.chroma_mod.to_dict(),
              'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
@@ -379,7 +384,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'mirror_center_mod', 'speed_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -441,6 +446,10 @@ class VideoChannel:
             self.blur_mod.reset()
             self.zoom_mod.reset()
             self.pixel_mod.reset()
+            self.chroma_mod.reset()
+            self.chroma_mod.wave_type = "sine"
+            self.chroma_mod.rate = 1.0
+            self.chroma_mod.depth = 0.5
             self.mirror_center_mod.reset()
             self.mirror_center_mod.wave_type = "triangle"
             self.mirror_center_mod.rate = 0.5
@@ -614,7 +623,7 @@ class VideoChannel:
             if self.rgb_mod.enabled and self.rgb_mod.depth > 0:
                 val = self.rgb_mod.get_value(beat_pos) * 100.0 
                 if abs(val) > 1:
-                    if self.glitch_rate <= 0.01: frame = frame.copy()
+                    frame = frame.copy()  # ALWAYS copy, don't condition on glitch_rate
                     shift = int(val)
                     frame[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1) 
                     frame[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)
@@ -643,15 +652,33 @@ class VideoChannel:
                 k = int(bval * 30) * 2 + 1 
                 frame = cv2.GaussianBlur(frame, (k, k), 0)
 
+        if self.chroma_mod.enabled and self.chroma_mod.depth > 0:
+            cval = self.chroma_mod.get_value(beat_pos) * 20.0  # Max offset of 20 pixels
+            if abs(cval) > 0.5:
+                frame = frame.copy()
+                h, w = frame.shape[:2]
+                offset = int(cval)
+                
+                # Create chromatic aberration by shifting color channels
+                # Red channel: shift right+down
+                M_r = np.float32([[1, 0, offset], [0, 1, offset]])
+                frame[:, :, 2] = cv2.warpAffine(frame[:, :, 2], M_r, (w, h), borderMode=cv2.BORDER_WRAP)
+                
+                # Blue channel: shift left+up  
+                M_b = np.float32([[1, 0, -offset], [0, 1, -offset]])
+                frame[:, :, 0] = cv2.warpAffine(frame[:, :, 0], M_b, (w, h), borderMode=cv2.BORDER_WRAP)
+
         frame = self._apply_mirror(frame, beat_pos)
 
         if self.mosh_amount > 0.01:
+            frame = frame.copy()  # Always work on a copy
             if self.mosh_buffer is None or self.mosh_buffer.shape != frame.shape:
-                self.mosh_buffer = frame.astype(np.float32)
+                self.mosh_buffer = frame.copy()
             else:
                 alpha = 1.0 - self.mosh_amount
-                cv2.addWeighted(frame.astype(np.float32), alpha, self.mosh_buffer, self.mosh_amount, 0, self.mosh_buffer)
-            frame = self.mosh_buffer.astype(np.uint8)
+                # Blend current frame with buffer
+                self.mosh_buffer = cv2.addWeighted(frame, alpha, self.mosh_buffer, self.mosh_amount, 0)
+            frame = self.mosh_buffer.copy()
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1297,7 +1324,7 @@ class VideoMixer:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
             for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
                 self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'mirror_center_mod', 'speed_mod']:
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod']:
                 self.reset_mod(c[k])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
@@ -1635,6 +1662,10 @@ class VideoMixer:
         fr_pix.pack(fill=tk.X, pady=2)
         ttk.Label(fr_pix, text="Pixel LFO:").pack(side=tk.LEFT)
         c['pixel_mod'] = self.setup_mod(fr_pix, ch.pixel_mod, "On")
+        fr_chroma = ttk.Frame(tab_fx)
+        fr_chroma.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_chroma, text="Chroma LFO:").pack(side=tk.LEFT)
+        c['chroma_mod'] = self.setup_mod_simple(fr_chroma, ch.chroma_mod, "On")
 
         c['seq_gate_w'] = SequencerWidget(tab_seq, ch, 'seq_gate', "Gate", "toggle")
         c['seq_gate_w'].pack(pady=5)
@@ -1790,6 +1821,7 @@ class VideoMixer:
             mc['inv'].set(m.invert)
         for m, k in [(ch.loop_start_mod, 'loop_start_mod'), (ch.rgb_mod, 'rgb_mod'), 
                      (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod'),
+                     (ch.chroma_mod, 'chroma_mod'),
                      (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod')]:
             mc = c[k]
             mc['en'].set(m.enabled)
