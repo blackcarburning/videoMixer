@@ -1418,7 +1418,7 @@ class VideoMixer:
                 num_bars = max(1, round(duration_sec / bar_duration_sec))
                 # Update global_loop_end and UI widget
                 self.global_loop_end = int(num_bars)
-                self.gloop_end.set(num_bars)
+                self.gloop_end.set(int(num_bars))
                 # Trigger timeline redraw to show correct loop region
                 if hasattr(self, 'timeline_widget'):
                     self.timeline_widget.redraw()
