@@ -292,6 +292,14 @@ class VideoChannel:
         self.blur_mod = Modulator()
         self.zoom_mod = Modulator()
         self.pixel_mod = Modulator()
+        self.mirror_center_mod = Modulator()
+        self.mirror_center_mod.wave_type = "triangle"
+        self.mirror_center_mod.rate = 0.5
+        self.mirror_center_mod.depth = 0.3
+        self.speed_mod = Modulator()
+        self.speed_mod.wave_type = "sine"
+        self.speed_mod.rate = 2.0
+        self.speed_mod.depth = 1.0
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -328,7 +336,8 @@ class VideoChannel:
              'brightness_mod': self.brightness_mod.to_dict(), 'contrast_mod': self.contrast_mod.to_dict(),
              'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
              'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
-             'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict()}
+             'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict(),
+             'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -356,7 +365,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'mirror_center_mod', 'speed_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -418,6 +427,14 @@ class VideoChannel:
             self.blur_mod.reset()
             self.zoom_mod.reset()
             self.pixel_mod.reset()
+            self.mirror_center_mod.reset()
+            self.mirror_center_mod.wave_type = "triangle"
+            self.mirror_center_mod.rate = 0.5
+            self.mirror_center_mod.depth = 0.3
+            self.speed_mod.reset()
+            self.speed_mod.wave_type = "sine"
+            self.speed_mod.rate = 2.0
+            self.speed_mod.depth = 1.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -431,25 +448,37 @@ class VideoChannel:
         self.resized_cache[frame_idx] = resized
         return resized
     
-    def _apply_mirror(self, frame):
+    def _apply_mirror(self, frame, beat_pos):
         if self.mirror_mode == "Off":
             return frame
-        elif self.mirror_mode == "Horizontal":
-            h, w = frame.shape[:2]
-            half = frame[:, :w//2]
-            return np.hstack([half, cv2.flip(half, 1)])
+        
+        # Get modulator value (-depth to +depth) and map to 0.2-0.8 range
+        mod_value = self.mirror_center_mod.get_value(beat_pos) if self.mirror_center_mod.enabled else 0.0
+        # Map from [-depth, +depth] to [0.2, 0.8]
+        center_offset = 0.5 + mod_value  # Now ranges from (0.5 - depth) to (0.5 + depth)
+        # Clamp to 0.2 - 0.8 range
+        center_offset = max(0.2, min(0.8, center_offset))
+        
+        h, w = frame.shape[:2]
+        
+        if self.mirror_mode == "Horizontal":
+            split_x = int(w * center_offset)
+            left = frame[:, :split_x]
+            return np.hstack([left, cv2.flip(left, 1)])
         elif self.mirror_mode == "Vertical":
-            h, w = frame.shape[:2]
-            half = frame[:h//2, :]
-            return np.vstack([half, cv2.flip(half, 0)])
+            split_y = int(h * center_offset)
+            top = frame[:split_y, :]
+            return np.vstack([top, cv2.flip(top, 0)])
         elif self.mirror_mode == "Quad":
-            h, w = frame.shape[:2]
-            q = frame[:h//2, :w//2]
+            split_y = int(h * center_offset)
+            split_x = int(w * center_offset)
+            q = frame[:split_y, :split_x]
             top = np.hstack([q, cv2.flip(q, 1)])
             return np.vstack([top, cv2.flip(top, 0)])
         elif self.mirror_mode == "Kaleido":
-            h, w = frame.shape[:2]
-            q = frame[:h//2, :w//2]
+            split_y = int(h * center_offset)
+            split_x = int(w * center_offset)
+            q = frame[:split_y, :split_x]
             q_flip = cv2.flip(q, 1)
             top = np.hstack([q, q_flip])
             bot = cv2.flip(top, 0)
@@ -520,7 +549,10 @@ class VideoChannel:
                     target_idx = (base_start + mod_offset + int(prog * loop_frames)) % self.frame_count
                 
                 else:
-                    frames_to_advance = delta_time * self.fps * self.speed * seq_speed_mult
+                    # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
+                    speed_mod_value = self.speed_mod.get_value(beat_pos) if self.speed_mod.enabled else 0.0
+                    effective_speed = self.speed * (1.0 + speed_mod_value * 8.0)
+                    frames_to_advance = delta_time * self.fps * effective_speed * seq_speed_mult
                     if self.reverse: self.playback_position -= frames_to_advance
                     else: self.playback_position += frames_to_advance
                     if self.loop: self.playback_position %= self.frame_count
@@ -590,7 +622,7 @@ class VideoChannel:
                 k = int(bval * 30) * 2 + 1 
                 frame = cv2.GaussianBlur(frame, (k, k), 0)
 
-        frame = self._apply_mirror(frame)
+        frame = self._apply_mirror(frame, beat_pos)
 
         if self.mosh_amount > 0.01:
             if self.mosh_buffer is None or self.mosh_buffer.shape != frame.shape:
@@ -1244,7 +1276,7 @@ class VideoMixer:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
             for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
                 self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod']:
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'mirror_center_mod', 'speed_mod']:
                 self.reset_mod(c[k])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
@@ -1493,6 +1525,10 @@ class VideoMixer:
         ttk.Checkbutton(srow, text="Loop", variable=c['loop'], command=lambda: setattr(ch, 'loop', c['loop'].get())).pack(side=tk.LEFT, padx=3)
         c['rev'] = tk.BooleanVar(value=False)
         ttk.Checkbutton(srow, text="Rev", variable=c['rev'], command=lambda: setattr(ch, 'reverse', c['rev'].get())).pack(side=tk.LEFT, padx=3)
+        srow2 = ttk.Frame(tab_loop)
+        srow2.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(srow2, text="Speed Mod:", font=("Arial", 8)).pack(side=tk.LEFT)
+        c['speed_mod'] = self.setup_mod_simple(srow2, ch.speed_mod, "On")
         lf = ttk.LabelFrame(tab_loop, text="Beat Loop", padding="3")
         lf.pack(fill=tk.X, pady=5)
         lrow = ttk.Frame(lf)
@@ -1536,6 +1572,10 @@ class VideoMixer:
         mc = ttk.Combobox(fr_mir, textvariable=c['mirror_mode'], values=VideoChannel.MIRROR_MODES, state="readonly", width=9)
         mc.pack(side=tk.LEFT, padx=5)
         mc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['mirror_mode']: setattr(ch, 'mirror_mode', v.get()))
+        mir_row = ttk.Frame(tab_fx)
+        mir_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(mir_row, text="Mod:", font=("Arial", 8)).pack(side=tk.LEFT)
+        c['mirror_center_mod'] = self.setup_mod_simple(mir_row, ch.mirror_center_mod, "On")
         fr_mosh = ttk.Frame(tab_fx)
         fr_mosh.pack(fill=tk.X, pady=2)
         ttk.Label(fr_mosh, text="Mosh:").pack(side=tk.LEFT)
@@ -1710,7 +1750,8 @@ class VideoMixer:
             mc['neg'].set(m.neg_only)
             mc['inv'].set(m.invert)
         for m, k in [(ch.loop_start_mod, 'loop_start_mod'), (ch.rgb_mod, 'rgb_mod'), 
-                     (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod')]:
+                     (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod'),
+                     (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod')]:
             mc = c[k]
             mc['en'].set(m.enabled)
             mc['wv'].set(m.wave_type)
