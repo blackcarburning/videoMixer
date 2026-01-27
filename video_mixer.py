@@ -1105,8 +1105,8 @@ class VideoProcessor(threading.Thread):
                         # Apply 10% correction factor to smooth out jitter
                         with self.lock:
                             self.start_time -= (drift / 1000.0) * 0.1
-                        # Recalculate elapsed_ms after adjustment
-                        elapsed_ms = (now - self.start_time) * 1000.0
+                            # Recalculate elapsed_ms after adjustment
+                            elapsed_ms = (now - self.start_time) * 1000.0
                 
                 loop_end_ms = self.mixer.global_loop_end * beat_duration_ms
                 loop_duration_ms = loop_end_ms - loop_start_ms
