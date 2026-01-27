@@ -782,31 +782,54 @@ class VideoChannel:
             if not frame.flags['WRITEABLE']:
                 frame = frame.copy()
             
-            # Convert target color from RGB to HSV for better color matching
-            target_rgb = np.uint8([[self.colorkey_color]]) * 255
-            target_hsv = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2HSV)[0][0]
+            # Convert target color from RGB (user input) to BGR (OpenCV format)
+            # Note: User selects RGB via color picker, but OpenCV uses BGR
+            target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
+            target_bgr_uint8 = np.uint8([[target_bgr]]) * 255
+            target_hsv = cv2.cvtColor(target_bgr_uint8, cv2.COLOR_BGR2HSV)[0][0]
             
-            # Convert frame to HSV
+            # Convert frame to HSV (frame is in BGR format from OpenCV)
             frame_uint8 = (frame * 255).astype(np.uint8)
-            frame_hsv = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2HSV)
+            frame_hsv = cv2.cvtColor(frame_uint8, cv2.COLOR_BGR2HSV)
             
             # Create mask based on hue similarity (more robust than RGB distance)
             hue_tolerance = self.colorkey_tolerance * 180  # Scale to HSV hue range (0-180)
             sat_tolerance = self.colorkey_tolerance * 255
             val_tolerance = self.colorkey_tolerance * 255
             
-            lower_bound = np.array([
-                max(0, target_hsv[0] - hue_tolerance),
-                max(0, target_hsv[1] - sat_tolerance),
-                max(0, target_hsv[2] - val_tolerance)
-            ])
-            upper_bound = np.array([
-                min(180, target_hsv[0] + hue_tolerance),
-                min(255, target_hsv[1] + sat_tolerance),
-                min(255, target_hsv[2] + val_tolerance)
-            ])
+            # Handle hue wrapping for red colors (hue wraps at 180)
+            lower_hue = target_hsv[0] - hue_tolerance
+            upper_hue = target_hsv[0] + hue_tolerance
             
-            mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
+            if lower_hue < 0 or upper_hue > 180:
+                # Hue wraps around - need to use two masks
+                if lower_hue < 0:
+                    # Lower bound wraps (e.g., red at hue 5 with tolerance 10)
+                    mask1_lower = np.array([0, max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
+                    mask1_upper = np.array([int(upper_hue), min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
+                    mask2_lower = np.array([int(180 + lower_hue), max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
+                    mask2_upper = np.array([180, min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
+                    mask = cv2.inRange(frame_hsv, mask1_lower, mask1_upper) | cv2.inRange(frame_hsv, mask2_lower, mask2_upper)
+                else:
+                    # Upper bound wraps
+                    mask1_lower = np.array([int(lower_hue), max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
+                    mask1_upper = np.array([180, min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
+                    mask2_lower = np.array([0, max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
+                    mask2_upper = np.array([int(upper_hue - 180), min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
+                    mask = cv2.inRange(frame_hsv, mask1_lower, mask1_upper) | cv2.inRange(frame_hsv, mask2_lower, mask2_upper)
+            else:
+                # No wrapping needed
+                lower_bound = np.array([
+                    int(lower_hue),
+                    max(0, target_hsv[1] - sat_tolerance),
+                    max(0, target_hsv[2] - val_tolerance)
+                ])
+                upper_bound = np.array([
+                    int(upper_hue),
+                    min(255, target_hsv[1] + sat_tolerance),
+                    min(255, target_hsv[2] + val_tolerance)
+                ])
+                mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
             
             # Apply mask - keep matching pixels, make others black
             mask_float = mask.astype(np.float32) / 255.0
@@ -1976,7 +1999,7 @@ class VideoMixer:
         c['colorkey_en'].set(ch.colorkey_enabled)
         c['colorkey_tol'].set(ch.colorkey_tolerance)
         # Update color button background
-        if ch.colorkey_color:
+        if ch.colorkey_color is not None:
             rgb = tuple(int(c*255) for c in ch.colorkey_color)
             c['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
         c['bl_en'].set(ch.beat_loop_enabled)
