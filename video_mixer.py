@@ -694,38 +694,31 @@ class VideoProcessor(threading.Thread):
                 if loop_len_bars <= 0: loop_len_bars = 4
                 loop_len_beats = loop_len_bars * self.mixer.beats_per_bar
                 start_beats = self.mixer.global_loop_start * self.mixer.beats_per_bar
-                loop_duration_ms = (loop_len_bars * self.mixer.beats_per_bar * 60.0 / self.mixer.bpm) * 1000.0
                 
-                # AUDIO SYNC MODE
-                if self.mixer.audio_track.enabled and self.mixer.audio_track.is_active():
-                    audio_pos_ms = self.mixer.audio_track.get_time_ms()
-                    
-                    # Logic 1: Loop Detect
-                    # Note: MCI stops if it hits end of file
-                    audio_stopped = not self.mixer.audio_track.engine.is_playing()
-                    audio_ended = (audio_stopped and audio_pos_ms >= (self.mixer.audio_track.engine.duration_ms - 100))
-                    audio_past_loop = (audio_pos_ms >= loop_duration_ms)
-                    
-                    if audio_ended or audio_past_loop:
-                        self.mixer.trigger_audio_loop()
-                        total_beats = start_beats 
-                        # Reset start_time to now (plus offset) so visuals snap back
-                        with self.lock: self.start_time = now - offset_sec
-                    else:
-                        # Follow audio directly
-                        rel_beats = (audio_pos_ms / 1000.0) * (self.mixer.bpm / 60.0)
-                        total_beats = start_beats + rel_beats
+                # Simple time-based loop detection
+                # Calculate elapsed time in milliseconds
+                elapsed_ms = (now - st) * 1000.0
                 
-                # CLOCK SYNC MODE
+                # Calculate loop boundaries in ms
+                bar_duration_ms = (60.0 / self.mixer.bpm) * self.mixer.beats_per_bar * 1000.0
+                loop_start_ms = self.mixer.global_loop_start * bar_duration_ms
+                loop_end_ms = self.mixer.global_loop_end * bar_duration_ms
+                loop_duration_ms = loop_end_ms - loop_start_ms
+                
+                # If we've passed the loop end, jump back
+                if elapsed_ms >= loop_duration_ms:
+                    # Restart audio at loop start
+                    if self.mixer.audio_track.enabled:
+                        self.mixer.audio_track.play(int(loop_start_ms))
+                    # Reset the clock so visuals also jump back
+                    with self.lock: 
+                        self.start_time = now
+                    # Set beat position to loop start
+                    total_beats = start_beats
                 else:
-                    rel_beat = total_beats % loop_len_beats
-                    if rel_beat < 0.1 and not self.mixer.loop_trigger_flag:
-                        self.mixer.loop_trigger_flag = True
-                        if self.mixer.audio_track.enabled:
-                            self.mixer.trigger_audio_loop()
-                    elif rel_beat > 0.5:
-                        self.mixer.loop_trigger_flag = False
-                    total_beats = start_beats + rel_beat
+                    # Within loop range - calculate beat position from elapsed time
+                    rel_beats = (elapsed_ms / 1000.0) * (self.mixer.bpm / 60.0)
+                    total_beats = start_beats + rel_beats
 
             bp = total_beats
             
@@ -805,8 +798,9 @@ class VideoMixer:
         self.update_loop()
         
     def trigger_audio_loop(self):
+        # Manually restart audio from the beginning
+        # Note: This is not used by the automatic loop logic
         if self.audio_track.enabled:
-            self.audio_track.engine.stop()
             self.audio_track.play(0)
 
     def reset_mod(self, c):
