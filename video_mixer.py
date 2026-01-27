@@ -1951,7 +1951,10 @@ class VideoMixer:
             return
         d = {'bpm': self.bpm, 'bpb': self.beats_per_bar, 'mix': self.mix, 'blend': self.blend_mode,
              'mbright': self.mbright.get(), 'mcontr': self.mcontr.get(), 'mix_mod': self.mix_mod.to_dict(),
-             'ch_a': self.channel_a.to_dict(), 'ch_b': self.channel_b.to_dict()}
+             'ch_a': self.channel_a.to_dict(), 'ch_b': self.channel_b.to_dict(),
+             'metro': self.metro_var.get(), 'mvol': self.mvol.get(),
+             'gloop_en': self.gloop_en.get(), 'gloop_start': self.gloop_start.get(), 'gloop_end': self.gloop_end.get(),
+             'audio_en': self.audio_en.get(), 'latency': self.latency_ms.get()}
         with open(p, 'w') as f:
             json.dump(d, f, indent=2)
         self.status.set(f"Saved preset")
@@ -1973,6 +1976,26 @@ class VideoMixer:
         self.blend_var.set(self.blend_mode)
         self.mbright.set(d.get('mbright', 0))
         self.mcontr.set(d.get('mcontr', 1))
+        if 'metro' in d:
+            self.metro_var.set(d['metro'])
+            self.metronome.enabled = self.metro_var.get()
+        if 'mvol' in d:
+            self.mvol.set(d['mvol'])
+            self.metronome.update_volume(self.mvol.get())
+        if 'gloop_en' in d:
+            self.gloop_en.set(d['gloop_en'])
+            self.global_loop_enabled = self.gloop_en.get()
+        if 'gloop_start' in d:
+            self.gloop_start.set(d['gloop_start'])
+            self.global_loop_start = self.gloop_start.get()
+        if 'gloop_end' in d:
+            self.gloop_end.set(d['gloop_end'])
+            self.global_loop_end = self.gloop_end.get()
+        if 'audio_en' in d:
+            self.audio_en.set(d['audio_en'])
+            self.audio_track.enabled = self.audio_en.get()
+        if 'latency' in d:
+            self.latency_ms.set(d['latency'])
         if 'mix_mod' in d:
             self.mix_mod.from_dict(d['mix_mod'])
             self.update_mod_ui(self.mix_mod_c, self.mix_mod)
@@ -1990,7 +2013,10 @@ class VideoMixer:
             return
         d = {'bpm': self.bpm, 'bpb': self.beats_per_bar, 'mix': self.mix, 'blend': self.blend_mode,
              'mbright': self.mbright.get(), 'mcontr': self.mcontr.get(), 'metro': self.metro_var.get(), 'mvol': self.mvol.get(),
-             'mix_mod': self.mix_mod.to_dict(), 'ch_a': self.channel_a.to_dict(True), 'ch_b': self.channel_b.to_dict(True)}
+             'mix_mod': self.mix_mod.to_dict(), 'ch_a': self.channel_a.to_dict(True), 'ch_b': self.channel_b.to_dict(True),
+             'gloop_en': self.gloop_en.get(), 'gloop_start': self.gloop_start.get(), 'gloop_end': self.gloop_end.get(),
+             'audio_en': self.audio_en.get(), 'latency': self.latency_ms.get(),
+             'audio_path': self.audio_track.path if hasattr(self.audio_track, 'path') and self.audio_track.path else None}
         with open(p, 'w') as f:
             json.dump(d, f, indent=2)
         self.status.set("Saved project")
@@ -2018,6 +2044,34 @@ class VideoMixer:
         self.metronome.enabled = self.metro_var.get()
         self.mvol.set(d.get('mvol', 0.5))
         self.metronome.update_volume(self.mvol.get())
+        if 'gloop_en' in d:
+            self.gloop_en.set(d['gloop_en'])
+            self.global_loop_enabled = self.gloop_en.get()
+        if 'gloop_start' in d:
+            self.gloop_start.set(d['gloop_start'])
+            self.global_loop_start = self.gloop_start.get()
+        if 'gloop_end' in d:
+            self.gloop_end.set(d['gloop_end'])
+            self.global_loop_end = self.gloop_end.get()
+        if 'audio_en' in d:
+            self.audio_en.set(d['audio_en'])
+            self.audio_track.enabled = self.audio_en.get()
+        if 'latency' in d:
+            self.latency_ms.set(d['latency'])
+        if 'audio_path' in d and d['audio_path']:
+            audio_path = d['audio_path']
+            if os.path.exists(audio_path):
+                if hasattr(self, 'timeline_widget') and self.timeline_widget:
+                    self.timeline_widget.load_audio_waveform(audio_path)
+                if self.audio_track.load(audio_path):
+                    self.audio_status.set(os.path.basename(audio_path)[:10])
+                    self.status.set(f"Loaded project with audio")
+                else:
+                    self.status.set(f"Loaded project (audio load failed)")
+            else:
+                self.status.set(f"Loaded project (audio file not found)")
+        else:
+            self.status.set("Loaded project")
         if 'mix_mod' in d:
             self.mix_mod.from_dict(d['mix_mod'])
             self.update_mod_ui(self.mix_mod_c, self.mix_mod)
@@ -2027,7 +2081,6 @@ class VideoMixer:
         if 'ch_b' in d:
             self.channel_b.from_dict(d['ch_b'], True)
             self.update_ch_ui(self.channel_b, self.ch_b)
-        self.status.set("Loaded project")
 
 
 class ExportDialog:
