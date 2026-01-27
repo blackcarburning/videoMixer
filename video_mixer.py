@@ -782,58 +782,19 @@ class VideoChannel:
             if not frame.flags['WRITEABLE']:
                 frame = frame.copy()
             
-            # Convert target color from RGB (user input) to BGR (OpenCV format)
-            # Note: User selects RGB via color picker, but OpenCV uses BGR
-            target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
-            target_bgr_uint8 = np.uint8([[target_bgr]]) * 255
-            target_hsv = cv2.cvtColor(target_bgr_uint8, cv2.COLOR_BGR2HSV)[0][0]
+            # Simple RGB distance-based color key (much faster than HSV)
+            target = np.array(self.colorkey_color, dtype=np.float32)
             
-            # Convert frame to HSV (frame is in BGR format from OpenCV)
-            frame_uint8 = (frame * 255).astype(np.uint8)
-            frame_hsv = cv2.cvtColor(frame_uint8, cv2.COLOR_BGR2HSV)
+            # Calculate color distance for each pixel
+            diff = frame - target[np.newaxis, np.newaxis, :]
+            distance = np.sqrt(np.sum(diff * diff, axis=2))
             
-            # Create mask based on hue similarity (more robust than RGB distance)
-            hue_tolerance = self.colorkey_tolerance * 180  # Scale to HSV hue range (0-180)
-            sat_tolerance = self.colorkey_tolerance * 255
-            val_tolerance = self.colorkey_tolerance * 255
-            
-            # Handle hue wrapping for red colors (hue wraps at 180)
-            lower_hue = target_hsv[0] - hue_tolerance
-            upper_hue = target_hsv[0] + hue_tolerance
-            
-            if lower_hue < 0 or upper_hue > 180:
-                # Hue wraps around - need to use two masks
-                if lower_hue < 0:
-                    # Lower bound wraps (e.g., red at hue 5 with tolerance 10)
-                    mask1_lower = np.array([0, max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
-                    mask1_upper = np.array([int(upper_hue), min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
-                    mask2_lower = np.array([int(180 + lower_hue), max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
-                    mask2_upper = np.array([180, min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
-                    mask = cv2.inRange(frame_hsv, mask1_lower, mask1_upper) | cv2.inRange(frame_hsv, mask2_lower, mask2_upper)
-                else:
-                    # Upper bound wraps
-                    mask1_lower = np.array([int(lower_hue), max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
-                    mask1_upper = np.array([180, min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
-                    mask2_lower = np.array([0, max(0, target_hsv[1] - sat_tolerance), max(0, target_hsv[2] - val_tolerance)])
-                    mask2_upper = np.array([int(upper_hue - 180), min(255, target_hsv[1] + sat_tolerance), min(255, target_hsv[2] + val_tolerance)])
-                    mask = cv2.inRange(frame_hsv, mask1_lower, mask1_upper) | cv2.inRange(frame_hsv, mask2_lower, mask2_upper)
-            else:
-                # No wrapping needed
-                lower_bound = np.array([
-                    int(lower_hue),
-                    max(0, target_hsv[1] - sat_tolerance),
-                    max(0, target_hsv[2] - val_tolerance)
-                ])
-                upper_bound = np.array([
-                    int(upper_hue),
-                    min(255, target_hsv[1] + sat_tolerance),
-                    min(255, target_hsv[2] + val_tolerance)
-                ])
-                mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
+            # Create mask based on tolerance
+            max_distance = self.colorkey_tolerance * 1.732  # sqrt(3) for RGB space diagonal
+            mask = (distance <= max_distance).astype(np.float32)
             
             # Apply mask - keep matching pixels, make others black
-            mask_float = mask.astype(np.float32) / 255.0
-            frame = frame * mask_float[:, :, np.newaxis]
+            frame = frame * mask[:, :, np.newaxis]
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1447,6 +1408,58 @@ class VideoMixer:
         if self.audio_track.enabled:
             self.audio_track.play(0)
 
+    def enable_eyedropper(self, ch, c):
+        """Enable eyedropper mode to pick color from video preview"""
+        self.eyedropper_active = True
+        self.eyedropper_channel = ch
+        self.eyedropper_controls = c
+        self.preview_canvas.config(cursor="crosshair")
+        self.status.set("Click on preview to pick color...")
+        
+    def on_preview_click(self, event):
+        """Handle click on preview canvas for eyedropper"""
+        if not hasattr(self, 'eyedropper_active') or not self.eyedropper_active:
+            return
+        
+        # Get pixel color from preview image
+        x, y = event.x, event.y
+        
+        # Determine which channel owns the preview
+        if hasattr(self, 'preview_photo') and self.preview_photo:
+            # Get the blended output image
+            try:
+                # Get color from the last rendered frame
+                from PIL import ImageTk, Image
+                # The preview_photo is a PhotoImage, we need to access the underlying image
+                # Get from blend_buffer which is the last rendered frame
+                if hasattr(self, 'blend_buffer') and self.blend_buffer is not None:
+                    h, w = self.blend_buffer.shape[:2]
+                    # Scale click coordinates to buffer size
+                    buf_x = int((x / self.preview_width) * w)
+                    buf_y = int((y / self.preview_height) * h)
+                    buf_x = max(0, min(w-1, buf_x))
+                    buf_y = max(0, min(h-1, buf_y))
+                    
+                    # Get RGB values (already in 0-1 range)
+                    color = self.blend_buffer[buf_y, buf_x]
+                    
+                    # Set color on the active channel
+                    if hasattr(self, 'eyedropper_channel'):
+                        self.eyedropper_channel.colorkey_color = [float(color[2]), float(color[1]), float(color[0])]  # BGR to RGB
+                        
+                        # Update UI button color
+                        if hasattr(self, 'eyedropper_controls') and 'colorkey_btn' in self.eyedropper_controls:
+                            rgb = tuple(int(c*255) for c in self.eyedropper_channel.colorkey_color)
+                            self.eyedropper_controls['colorkey_btn'].config(bg='#%02x%02x%02x' % rgb)
+                        
+                        self.status.set(f"Color picked: RGB({rgb[0]}, {rgb[1]}, {rgb[2]})")
+            except Exception as e:
+                self.status.set(f"Error picking color: {e}")
+        
+        # Disable eyedropper mode
+        self.eyedropper_active = False
+        self.preview_canvas.config(cursor="")
+
     def reset_mod(self, c):
         c['en'].set(False)
         c['wv'].set("sine")
@@ -1518,6 +1531,8 @@ class VideoMixer:
         pf.pack(side=tk.LEFT, padx=(0, 10))
         self.preview_canvas = tk.Canvas(pf, width=self.preview_width, height=self.preview_height, bg="black")
         self.preview_canvas.pack()
+        self.preview_canvas.bind("<Button-1>", self.on_preview_click)
+        self.eyedropper_active = False
         tf = ttk.LabelFrame(top, text="Transport", padding="5")
         tf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
@@ -1809,17 +1824,9 @@ class VideoMixer:
         ttk.Checkbutton(fr_colorkey, text="ColorKey", variable=c['colorkey_en'], 
                         command=lambda: setattr(ch, 'colorkey_enabled', c['colorkey_en'].get())).pack(side=tk.LEFT)
 
-        # Color picker button
-        def pick_color(ch, c):
-            import tkinter.colorchooser
-            color = tkinter.colorchooser.askcolor(title="Choose Key Color")
-            if color[0]:  # RGB tuple (0-255)
-                # Convert to 0-1 range
-                ch.colorkey_color = [color[0][0]/255.0, color[0][1]/255.0, color[0][2]/255.0]
-                c['colorkey_btn'].config(bg='#%02x%02x%02x' % (int(color[0][0]), int(color[0][1]), int(color[0][2])))
-
+        # Eyedropper button to pick color from video
         c['colorkey_btn'] = tk.Button(fr_colorkey, text="Pick", width=5, bg='#00ff00',
-                                       command=lambda: pick_color(ch, c))
+                                       command=lambda: self.enable_eyedropper(ch, c))
         c['colorkey_btn'].pack(side=tk.LEFT, padx=2)
 
         ttk.Label(fr_colorkey, text="Tol:").pack(side=tk.LEFT, padx=(5,2))
