@@ -798,8 +798,8 @@ class VideoMixer:
         self.update_loop()
         
     def trigger_audio_loop(self):
-        # Simple method to restart audio at loop start
-        # Note: The actual loop start position is calculated in VideoProcessor.run()
+        # Manually restart audio from the beginning
+        # Note: This is not used by the automatic loop logic
         if self.audio_track.enabled:
             self.audio_track.play(0)
 
