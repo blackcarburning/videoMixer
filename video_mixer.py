@@ -778,27 +778,27 @@ class VideoChannel:
                 self.slicer_buffer = frame.copy()
 
         # Color Key filter - only show pixels matching target color
-        if self.colorkey_enabled:
+        if self.colorkey_enabled and self.colorkey_tolerance >= 0:
             if not frame.flags['WRITEABLE']:
                 frame = frame.copy()
             
-            if self.colorkey_tolerance > 0.001:
-                # Simple RGB distance-based color key
-                # Convert target color from RGB (user input) to BGR (OpenCV format)
-                target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
-                target = np.array(target_bgr, dtype=np.float32)
-                
-                # Calculate color distance for each pixel
-                diff = np.abs(frame - target[np.newaxis, np.newaxis, :])
-                
-                # Use max difference across channels (simpler than Euclidean)
-                max_diff = np.max(diff, axis=2)
-                
-                # Create mask based on tolerance (0.3 tolerance = 0.3 difference in any channel)
-                mask = (max_diff <= self.colorkey_tolerance).astype(np.float32)
-                
-                # Apply mask
-                frame = frame * mask[:, :, np.newaxis]
+            # Convert target color from RGB (user input) to BGR (OpenCV format)
+            target_bgr = [self.colorkey_color[2], self.colorkey_color[1], self.colorkey_color[0]]
+            target = np.array(target_bgr, dtype=np.float32)
+            
+            # Calculate absolute color difference for each pixel
+            diff = np.abs(frame - target[np.newaxis, np.newaxis, :])
+            
+            # Use max difference across channels (Chebyshev distance)
+            # This is more intuitive than Euclidean: tolerance directly maps to 
+            # "max allowed difference in any RGB channel" (e.g., 0.3 = 30% variation)
+            max_diff = np.max(diff, axis=2)
+            
+            # Create mask based on tolerance
+            mask = (max_diff <= self.colorkey_tolerance).astype(np.float32)
+            
+            # Apply mask - keep matching pixels, make others black
+            frame = frame * mask[:, :, np.newaxis]
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
