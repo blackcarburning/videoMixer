@@ -1270,6 +1270,9 @@ class VideoMixer:
         bpm_spin.bind("<Return>", lambda e: self.on_bpm())
         self.tap_times = []
         ttk.Button(row1, text="Tap", command=self.tap_tempo, width=4).pack(side=tk.LEFT, padx=3)
+        ttk.Label(row1, text="BPB:").pack(side=tk.LEFT, padx=(5, 0))
+        self.bpb_var = tk.IntVar(value=4)
+        ttk.Spinbox(row1, from_=1, to=16, textvariable=self.bpb_var, width=3, command=self.on_bpb).pack(side=tk.LEFT)
         self.beat_var = tk.StringVar(value="Beat: 0.0")
         ttk.Label(row1, textvariable=self.beat_var, font=("Consolas", 10)).pack(side=tk.LEFT, padx=10)
         self.beat_flash = tk.Canvas(row1, width=25, height=25, bg="gray", highlightthickness=1)
