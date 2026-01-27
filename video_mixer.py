@@ -728,6 +728,7 @@ class TimelineWidget(tk.Canvas):
             
         except Exception as e:
             print(f"Failed to load waveform: {e}")
+            # Clear waveform but don't crash
             self.waveform_samples = None
             self.duration_sec = 0
             self.draw_empty()
@@ -849,8 +850,8 @@ class TimelineWidget(tk.Canvas):
         start_x = (start_time_sec / self.duration_sec) * w
         end_x = (end_time_sec / self.duration_sec) * w
         
-        # Draw loop region (shaded area)
-        self.create_rectangle(start_x, 0, end_x, h, fill="#00ff0015", outline="", tags="loop_region")
+        # Draw loop region (shaded area) - use stipple pattern for transparency effect
+        self.create_rectangle(start_x, 0, end_x, h, fill="#00ff00", stipple="gray12", outline="", tags="loop_region")
         
         # Draw START handle - thick green bar with flag
         handle_width = 8
