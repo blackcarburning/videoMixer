@@ -15,12 +15,18 @@ import pygame
 
 # --- PYGAME AUDIO ENGINE ---
 class NativeAudioEngine:
+    _mixer_initialized = False
+    
     def __init__(self):
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+        # Initialize pygame.mixer only once (it's a global resource)
+        if not NativeAudioEngine._mixer_initialized:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+            NativeAudioEngine._mixer_initialized = True
         self.is_loaded = False
         self.duration_ms = 0
         self.start_offset_ms = 0  # Track where we started playing from
         self.play_start_time = 0  # Track when we started playing
+        self.last_position_ms = 0  # Track last known position
         
     def load(self, path):
         self.stop()
@@ -57,15 +63,18 @@ class NativeAudioEngine:
         if not self.is_loaded:
             return 0
         if not pygame.mixer.music.get_busy():
-            return self.start_offset_ms
+            # Return last known position when not playing
+            return self.last_position_ms
         # pygame.mixer.music.get_pos() returns milliseconds since play started
         # We need to add the start offset to get the actual position in the file
         pos_ms = pygame.mixer.music.get_pos()
         if pos_ms >= 0:
-            return self.start_offset_ms + pos_ms
+            self.last_position_ms = self.start_offset_ms + pos_ms
+            return self.last_position_ms
         # Fallback if get_pos fails
         elapsed_time = time.time() - self.play_start_time
-        return self.start_offset_ms + int(elapsed_time * 1000)
+        self.last_position_ms = self.start_offset_ms + int(elapsed_time * 1000)
+        return self.last_position_ms
 
     def pause(self):
         if self.is_loaded:
@@ -78,12 +87,14 @@ class NativeAudioEngine:
     def stop(self):
         if self.is_loaded:
             pygame.mixer.music.stop()
-            self.start_offset_ms = 0
+            # Don't reset start_offset_ms to preserve position for get_position()
+            self.last_position_ms = self.start_offset_ms
 
     def close(self):
         try:
             pygame.mixer.music.unload()
-        except:
+        except pygame.error:
+            # Ignore pygame errors during unload
             pass
         self.is_loaded = False
 
