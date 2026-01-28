@@ -335,6 +335,22 @@ class VideoChannel:
         self.slicer_mod.wave_type = "square"
         self.slicer_mod.rate = 2.0
         self.slicer_mod.depth = 1.0
+        self.kaleidoscope_amount = 0.0
+        self.kaleidoscope_buffer = None
+        self.kaleidoscope_mod = Modulator()
+        self.kaleidoscope_mod.wave_type = "sine"
+        self.kaleidoscope_mod.rate = 0.5
+        self.kaleidoscope_mod.depth = 1.0
+        self.vignette_amount = 0.0
+        self.vignette_mod = Modulator()
+        self.vignette_mod.wave_type = "sine"
+        self.vignette_mod.rate = 0.25
+        self.vignette_mod.depth = 1.0
+        self.color_shift_amount = 0.0
+        self.color_shift_mod = Modulator()
+        self.color_shift_mod.wave_type = "triangle"
+        self.color_shift_mod.rate = 1.0
+        self.color_shift_mod.depth = 1.0
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -358,6 +374,7 @@ class VideoChannel:
             self.mosh_buffer = None
             self.echo_buffer = None
             self.slicer_buffer = None
+            self.kaleidoscope_buffer = None
     
     def to_dict(self, include_video=False):
         d = {'brightness': self.brightness, 'contrast': self.contrast, 'saturation': self.saturation,
@@ -497,6 +514,18 @@ class VideoChannel:
             self.slicer_mod.wave_type = "square"
             self.slicer_mod.rate = 2.0
             self.slicer_mod.depth = 1.0
+            self.kaleidoscope_mod.reset()
+            self.kaleidoscope_mod.wave_type = "sine"
+            self.kaleidoscope_mod.rate = 0.5
+            self.kaleidoscope_mod.depth = 1.0
+            self.vignette_mod.reset()
+            self.vignette_mod.wave_type = "sine"
+            self.vignette_mod.rate = 0.25
+            self.vignette_mod.depth = 1.0
+            self.color_shift_mod.reset()
+            self.color_shift_mod.wave_type = "triangle"
+            self.color_shift_mod.rate = 1.0
+            self.color_shift_mod.depth = 1.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -735,11 +764,11 @@ class VideoChannel:
             if self.echo_buffer is None or self.echo_buffer.shape != frame.shape:
                 self.echo_buffer = frame.copy()
             else:
-                # Blend with echo buffer (stronger persistence than mosh)
-                alpha = 1.0 - (effective_echo * 0.7)  # Max 70% echo retention
-                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.7, 0)
-            # Layer current frame over echo
-            frame = cv2.addWeighted(frame, 0.6, self.echo_buffer, 0.4, 0)
+                # Blend with echo buffer (stronger persistence for pronounced trails)
+                alpha = 1.0 - (effective_echo * 0.9)  # Max 90% echo retention
+                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.9, 0)
+            # Layer current frame over echo with stronger echo presence
+            frame = cv2.addWeighted(frame, 0.4, self.echo_buffer, 0.6, 0)
 
         # Slicer effect - creates scanline displacement glitches
         effective_slicer = self.slicer_amount
@@ -763,6 +792,71 @@ class VideoChannel:
                     if random.random() < effective_slicer:
                         frame[y_start:y_end, :] = self.slicer_buffer[y_start:y_end, :]
                 self.slicer_buffer = frame.copy()
+
+        # Kaleidoscope effect - creates symmetrical mirror patterns
+        effective_kaleidoscope = self.kaleidoscope_amount
+        if self.kaleidoscope_mod.enabled:
+            mod_val = (self.kaleidoscope_mod.get_value(beat_pos) + 1.0) / 2.0
+            effective_kaleidoscope = self.kaleidoscope_amount * mod_val
+
+        if effective_kaleidoscope > 0.01:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            
+            # Simple mirror implementation for kaleidoscope
+            quad = frame[:h//2, :w//2].copy()
+            temp = np.zeros_like(frame)
+            temp[:h//2, :w//2] = quad
+            temp[:h//2, w//2:] = cv2.flip(quad, 1)
+            temp[h//2:, :] = cv2.flip(temp[:h//2, :], 0)
+            
+            frame = cv2.addWeighted(frame, 1.0 - effective_kaleidoscope, temp, effective_kaleidoscope, 0)
+
+        # Vignette effect - darkens edges
+        effective_vignette = self.vignette_amount
+        if self.vignette_mod.enabled:
+            mod_val = (self.vignette_mod.get_value(beat_pos) + 1.0) / 2.0
+            effective_vignette = self.vignette_amount * mod_val
+
+        if effective_vignette > 0.01:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            
+            # Create radial gradient mask
+            y_indices, x_indices = np.ogrid[:h, :w]
+            center_y, center_x = h / 2, w / 2
+            
+            # Calculate distance from center, normalized
+            max_dist = np.sqrt(center_x**2 + center_y**2)
+            distances = np.sqrt((x_indices - center_x)**2 + (y_indices - center_y)**2)
+            distances = distances / max_dist
+            
+            # Create vignette mask (smooth falloff)
+            radius = 1.0 - (effective_vignette * 0.5)
+            vignette_mask = np.clip(1.0 - (distances - radius) / (1.0 - radius), 0, 1)
+            vignette_mask = vignette_mask ** 2
+            
+            # Apply vignette
+            for i in range(3):
+                frame[:, :, i] = (frame[:, :, i] * vignette_mask).astype(np.uint8)
+
+        # Color Shift effect - HSV hue rotation
+        effective_color_shift = self.color_shift_amount
+        if self.color_shift_mod.enabled:
+            mod_val = self.color_shift_mod.get_value(beat_pos)
+            effective_color_shift = mod_val
+
+        if abs(effective_color_shift) > 0.01:
+            frame = frame.copy()
+            # Convert to HSV
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            
+            # Shift hue (H channel is 0-179 in OpenCV)
+            hue_shift = effective_color_shift * 90
+            hsv[:, :, 0] = (hsv[:, :, 0] + hue_shift) % 180
+            
+            # Convert back to BGR
+            frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1404,11 +1498,16 @@ class VideoMixer:
             c['post_rt'].set("Off")
             c['mirror_mode'].set("Off")
             c['mosh'].set(0.0)
+            c['echo'].set(0.0)
+            c['slicer'].set(0.0)
+            c['kaleidoscope'].set(0.0)
+            c['vignette'].set(0.0)
+            c['color_shift'].set(0.0)
             if ch.frame_count > 0:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
             for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
                 self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod']:
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod']:
                 self.reset_mod(c[k])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
@@ -1623,10 +1722,12 @@ class VideoMixer:
         tab_loop = ttk.Frame(nb, padding=5)
         tab_fx = ttk.Frame(nb, padding=5)
         tab_seq = ttk.Frame(nb, padding=5)
+        tab_bonus = ttk.Frame(nb, padding=5)
         nb.add(tab_main, text="Main")
         nb.add(tab_loop, text="Loop/Time")
         nb.add(tab_fx, text="FX")
         nb.add(tab_seq, text="Seq")
+        nb.add(tab_bonus, text="Bonus")
         
         row1 = ttk.Frame(tab_main)
         row1.pack(fill=tk.X, pady=2)
@@ -1763,6 +1864,31 @@ class VideoMixer:
         fr_chroma.pack(fill=tk.X, pady=2)
         ttk.Label(fr_chroma, text="Chroma LFO:").pack(side=tk.LEFT)
         c['chroma_mod'] = self.setup_mod_simple(fr_chroma, ch.chroma_mod, "On")
+
+        # Bonus Tab Effects
+        fr_kaleido = ttk.Frame(tab_bonus)
+        fr_kaleido.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_kaleido, text="Kaleid:").pack(side=tk.LEFT)
+        c['kaleidoscope'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_kaleido, from_=0.0, to=1.0, variable=c['kaleidoscope'], length=80, 
+                  command=lambda v, ch=ch: setattr(ch, 'kaleidoscope_amount', float(v))).pack(side=tk.LEFT)
+        c['kaleidoscope_mod'] = self.setup_mod_simple(fr_kaleido, ch.kaleidoscope_mod, "LFO")
+
+        fr_vignette = ttk.Frame(tab_bonus)
+        fr_vignette.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_vignette, text="Vignette:").pack(side=tk.LEFT)
+        c['vignette'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_vignette, from_=0.0, to=1.0, variable=c['vignette'], length=80,
+                  command=lambda v, ch=ch: setattr(ch, 'vignette_amount', float(v))).pack(side=tk.LEFT)
+        c['vignette_mod'] = self.setup_mod_simple(fr_vignette, ch.vignette_mod, "LFO")
+
+        fr_colorshift = ttk.Frame(tab_bonus)
+        fr_colorshift.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_colorshift, text="ColorShift:").pack(side=tk.LEFT)
+        c['color_shift'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_colorshift, from_=-1.0, to=1.0, variable=c['color_shift'], length=80,
+                  command=lambda v, ch=ch: setattr(ch, 'color_shift_amount', float(v))).pack(side=tk.LEFT)
+        c['color_shift_mod'] = self.setup_mod_simple(fr_colorshift, ch.color_shift_mod, "LFO")
 
         c['seq_gate_w'] = SequencerWidget(tab_seq, ch, 'seq_gate', "Gate", "toggle")
         c['seq_gate_w'].pack(pady=5)
