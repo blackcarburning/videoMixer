@@ -1,4 +1,5 @@
 
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
@@ -764,11 +765,14 @@ class VideoChannel:
             if self.echo_buffer is None or self.echo_buffer.shape != frame.shape:
                 self.echo_buffer = frame.copy()
             else:
-                # Blend with echo buffer (stronger persistence for pronounced trails)
-                alpha = 1.0 - (effective_echo * 0.9)  # Max 90% echo retention
-                self.echo_buffer = cv2.addWeighted(frame, alpha, self.echo_buffer, effective_echo * 0.9, 0)
-            # Layer current frame over echo with stronger echo presence
-            frame = cv2.addWeighted(frame, 0.4, self.echo_buffer, 0.6, 0)
+                # Extreme persistence - buffer barely decays
+                # At max effective_echo, only 0.5% of new frame bleeds in
+                decay = 0.05 - (effective_echo * 0.045)  # Range: 0.05 down to 0.005
+                self.echo_buffer = cv2.addWeighted(frame, decay, self.echo_buffer, 1.0 - decay, 0)
+            # Blend with massive echo presence
+            current_weight = 0.6 - (effective_echo * 0.4)  # Range: 0.6 down to 0.2
+            echo_weight = 0.6 + (effective_echo * 0.6)     # Range: 0.6 up to 1.2 (oversaturates)
+            frame = cv2.addWeighted(frame, current_weight, self.echo_buffer, echo_weight, 0)
 
         # Slicer effect - creates scanline displacement glitches
         effective_slicer = self.slicer_amount
