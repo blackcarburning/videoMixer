@@ -1719,6 +1719,10 @@ class VideoMixer:
         base_width = 640
         new_height = int(base_width * h_ratio / w_ratio)
         
+        # Only update if dimensions actually changed
+        if self.preview_width == base_width and self.preview_height == new_height:
+            return
+        
         # Update preview dimensions
         self.preview_width = base_width
         self.preview_height = new_height
