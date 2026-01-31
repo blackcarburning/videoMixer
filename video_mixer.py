@@ -842,7 +842,7 @@ class VideoChannel:
             
             # Apply vignette
             for i in range(3):
-                frame[:, :, i] = (frame[:, :, i] * vignette_mask).astype(np.uint8)
+                frame[:, :, i] = frame[:, :, i] * vignette_mask
 
         # Color Shift effect - HSV hue rotation
         effective_color_shift = self.color_shift_amount
@@ -852,15 +852,19 @@ class VideoChannel:
 
         if abs(effective_color_shift) > 0.01:
             frame = frame.copy()
+            # Convert to uint8 for HSV conversion
+            frame_uint8 = (frame * 255.0).astype(np.uint8)
             # Convert to HSV
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv = cv2.cvtColor(frame_uint8, cv2.COLOR_BGR2HSV).astype(np.float32)
             
             # Shift hue (H channel is 0-179 in OpenCV)
             hue_shift = effective_color_shift * 90
             hsv[:, :, 0] = (hsv[:, :, 0] + hue_shift) % 180
             
             # Convert back to BGR
-            frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+            frame_uint8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+            # Convert back to float32
+            frame = frame_uint8.astype(np.float32) * (1.0/255.0)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -2480,9 +2484,18 @@ class ExportDialog:
         self.bpm = bpm
         self.bpb = bpb
         
+        # Define aspect ratios and their resolutions
+        self.aspect_ratios = {
+            "16:9": ["1280x720", "1920x1080", "2560x1440", "3840x2160"],
+            "4:3": ["640x480", "800x600", "1024x768", "1600x1200"],
+            "1:1": ["720x720", "1080x1080", "1440x1440", "2160x2160"],
+            "3:4": ["480x640", "600x800", "768x1024", "1200x1600"],
+            "9:16": ["720x1280", "1080x1920", "1440x2560", "2160x3840"]
+        }
+        
         dlg = tk.Toplevel(parent)
         dlg.title("Export Video")
-        dlg.geometry("300x280")
+        dlg.geometry("300x330")
         dlg.transient(parent)
         dlg.grab_set()
         
@@ -2510,9 +2523,20 @@ class ExportDialog:
         self.fps = tk.IntVar(value=24)
         ttk.Combobox(f, textvariable=self.fps, values=[24, 25, 30, 60], width=6).pack(anchor=tk.W, pady=(0, 8))
         
+        # Aspect Ratio selector
+        ttk.Label(f, text="Aspect Ratio:").pack(anchor=tk.W)
+        self.aspect_ratio = tk.StringVar(value="16:9")
+        self.aspect_combo = ttk.Combobox(f, textvariable=self.aspect_ratio, 
+                                         values=list(self.aspect_ratios.keys()), 
+                                         width=12, state="readonly")
+        self.aspect_combo.pack(anchor=tk.W, pady=(0, 8))
+        self.aspect_combo.bind("<<ComboboxSelected>>", self.update_resolutions)
+        
         ttk.Label(f, text="Resolution:").pack(anchor=tk.W)
         self.res = tk.StringVar(value="1920x1080")
-        ttk.Combobox(f, textvariable=self.res, values=["1280x720", "1920x1080", "2560x1440", "3840x2160"], width=12).pack(anchor=tk.W, pady=(0, 8))
+        self.res_combo = ttk.Combobox(f, textvariable=self.res, width=12)
+        self.res_combo.pack(anchor=tk.W, pady=(0, 8))
+        self.update_resolutions()  # Initialize resolution options
         
         ttk.Label(f, text=f"BPM: {bpm}  Beats/Bar: {bpb}").pack(anchor=tk.W, pady=(0, 8))
         
@@ -2530,6 +2554,15 @@ class ExportDialog:
         except:
             pass
     
+    def update_resolutions(self, event=None):
+        """Update resolution options based on selected aspect ratio"""
+        aspect = self.aspect_ratio.get()
+        resolutions = self.aspect_ratios.get(aspect, ["1920x1080"])
+        self.res_combo['values'] = resolutions
+        # Set to first resolution if current is not in the new list
+        if self.res.get() not in resolutions:
+            self.res.set(resolutions[0])
+    
     def on_ok(self, dlg):
         r = self.res.get().split('x')
         self.result = {
@@ -2540,6 +2573,7 @@ class ExportDialog:
             'format': self.format.get()
         }
         dlg.destroy()
+
 
 
 if __name__ == "__main__":
