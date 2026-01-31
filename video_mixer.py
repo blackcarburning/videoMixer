@@ -864,7 +864,7 @@ class VideoChannel:
             # Convert back to BGR
             frame_uint8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
             # Convert back to float32
-            frame = frame_uint8.astype(np.float32) * (1.0/255.0)
+            frame = frame_uint8.astype(np.float32) / 255.0
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -2573,7 +2573,6 @@ class ExportDialog:
             'format': self.format.get()
         }
         dlg.destroy()
-
 
 
 if __name__ == "__main__":
