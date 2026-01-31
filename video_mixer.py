@@ -1582,6 +1582,12 @@ class VideoMixer:
         # Row 2
         row2 = ttk.Frame(tf)
         row2.pack(fill=tk.X, pady=2)
+        ttk.Label(row2, text="Aspect:").pack(side=tk.LEFT, padx=(0, 2))
+        self.aspect_var = tk.StringVar(value="16:9")
+        aspect_combo = ttk.Combobox(row2, textvariable=self.aspect_var, values=["16:9", "4:3", "1:1", "3:4", "9:16"], state="readonly", width=6)
+        aspect_combo.pack(side=tk.LEFT, padx=3)
+        aspect_combo.bind("<<ComboboxSelected>>", lambda e: self.on_aspect_ratio_change())
+        ttk.Label(row2, text=" | ").pack(side=tk.LEFT)
         self.metro_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2, text="Metro", variable=self.metro_var, command=lambda: setattr(self.metronome, 'enabled', self.metro_var.get())).pack(side=tk.LEFT)
         ttk.Label(row2, text="Vol:").pack(side=tk.LEFT, padx=(5, 2))
@@ -1690,6 +1696,45 @@ class VideoMixer:
             self.metronome.set_beats_per_bar(self.beats_per_bar)
         except:
             pass
+    
+    def on_aspect_ratio_change(self):
+        """Handle aspect ratio change from the dropdown."""
+        aspect = self.aspect_var.get()
+        
+        # Define aspect ratio mappings
+        aspect_ratios = {
+            "16:9": (16, 9),
+            "4:3": (4, 3),
+            "1:1": (1, 1),
+            "3:4": (3, 4),
+            "9:16": (9, 16)
+        }
+        
+        if aspect not in aspect_ratios:
+            return
+        
+        w_ratio, h_ratio = aspect_ratios[aspect]
+        
+        # Keep width at 640 and adjust height to maintain aspect ratio
+        base_width = 640
+        new_height = int(base_width * h_ratio / w_ratio)
+        
+        # Update preview dimensions
+        self.preview_width = base_width
+        self.preview_height = new_height
+        
+        # Update canvas size
+        self.preview_canvas.config(width=self.preview_width, height=self.preview_height)
+        
+        # Update video channels target size
+        self.channel_a.set_target_size(self.preview_width, self.preview_height)
+        self.channel_b.set_target_size(self.preview_width, self.preview_height)
+        
+        # Reinitialize buffers with new dimensions
+        self.blend_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.float32)
+        self.output_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
+        
+        self.status.set(f"Aspect ratio changed to {aspect}")
     
     def load_audio(self):
         p = filedialog.askopenfilename(filetypes=[("Audio", "*.wav *.mp3 *.ogg")])
