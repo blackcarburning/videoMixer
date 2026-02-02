@@ -732,24 +732,23 @@ class VideoChannel:
                 # Calculate effective beat position with base speed applied
                 eff_beat_pos = beat_pos * self.speed
                 
-                # STUTTER SEQUENCER: Freeze at the start of the current step
+                # STUTTER SEQUENCER: Freeze at the start of the current step (highest priority)
                 if is_stuttering:
                     # Quantize to step boundaries (16 steps per 4 beats)
                     step_start_beat = (seq_step / 16.0) * 4.0
                     eff_beat_pos = step_start_beat * self.speed
-                
-                # JUMP SEQUENCER: Offset the beat position backwards
-                # 0=Gray (no jump), 1=Yellow (-1 beat), 2=Red (-4 beats/1 bar)
-                if jmp_mod_idx == 1:
-                    eff_beat_pos -= 1.0 * self.speed
-                elif jmp_mod_idx == 2:
-                    eff_beat_pos -= 4.0 * self.speed
-                
-                # SPEED SEQUENCER: Apply speed multiplier
-                # Special cases: freeze (4) acts like stutter, reverse (3) handled differently per mode
-                if spd_mod_idx == 4:  # Freeze/Black - same as stutter
+                # SPEED SEQUENCER: Freeze mode (acts like stutter)
+                elif spd_mod_idx == 4:  # Freeze/Black
                     step_start_beat = (seq_step / 16.0) * 4.0
                     eff_beat_pos = step_start_beat * self.speed
+                else:
+                    # JUMP SEQUENCER: Only apply when not stuttering/freezing
+                    # Offset the beat position backwards
+                    # 0=Gray (no jump), 1=Yellow (-1 beat), 2=Red (-4 beats/1 bar)
+                    if jmp_mod_idx == 1:
+                        eff_beat_pos -= 1.0 * self.speed
+                    elif jmp_mod_idx == 2:
+                        eff_beat_pos -= 4.0 * self.speed
                 
                 # Calculate target frame based on playback mode
                 if self.beat_loop_enabled:
