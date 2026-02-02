@@ -324,7 +324,7 @@ class VideoChannel:
     DEFAULT_BPM = 120.0
     MIN_ENVELOPE_TIME = 0.01
     DEFAULT_ENVELOPE_TIME = 0.05
-    GATE_TIMEBASE_VALUES = {"4": 4.0, "2": 2.0, "1": 1.0, "1/2": 0.5, "1/4": 0.25}
+    GATE_TIMEBASE_VALUES = {"1/4": 0.25, "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0}
     
     def __init__(self, target_width, target_height):
         self.video_path = None
