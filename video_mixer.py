@@ -756,7 +756,8 @@ class VideoChannel:
                     loop_beats = self.loop_length_beats
                     if loop_beats <= 0: loop_beats = 1.0
                     # Apply speed sequencer multiplier to beat position for loop progression
-                    speed_adjusted_beat = eff_beat_pos * seq_speed_mult
+                    # Use absolute value for magnitude; reverse direction is handled by eff_rev below
+                    speed_adjusted_beat = eff_beat_pos * abs(seq_speed_mult)
                     prog = (speed_adjusted_beat % loop_beats) / loop_beats
                     eff_rev = self.reverse
                     if spd_mod_idx == 3: eff_rev = not eff_rev
