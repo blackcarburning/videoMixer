@@ -1023,7 +1023,7 @@ class VideoChannel:
             # Trigger snare sound on gate transitions
             if seq_step != self.last_gate_step:
                 # Step changed
-                if self.gate_snare_enabled and gate_on == 1:
+                if self.gate_snare_enabled and gate_on:
                     # New step has gate ON - fire snare
                     global SNARE_SOUND
                     # Lazy initialization if not already done
@@ -1039,7 +1039,7 @@ class VideoChannel:
                             SNARE_SOUND.play()
                         except:
                             pass
-                self.last_gate_step = seq_step
+            self.last_gate_step = seq_step
             
             if not gate_on:
                 if self.gate_envelope_enabled:
