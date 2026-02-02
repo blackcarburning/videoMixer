@@ -9,7 +9,10 @@ import threading
 import time
 import os
 import json
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 import queue
 import random
 import ctypes
@@ -168,7 +171,7 @@ class HighPrecisionMetronome:
 
     def play_click(self, is_downbeat=False):
         try:
-            if self.enabled:
+            if self.enabled and winsound is not None:
                 winsound.Beep(self.high_freq if is_downbeat else self.low_freq, self.duration)
         except:
             pass
@@ -1536,6 +1539,7 @@ class VideoMixer:
             c['slicer'].set(0.0)
             c['kaleidoscope'].set(0.0)
             c['vignette'].set(0.0)
+            c['vignette_transparency'].set(0.5)
             c['color_shift'].set(0.0)
             if ch.frame_count > 0:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
