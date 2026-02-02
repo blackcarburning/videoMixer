@@ -717,51 +717,60 @@ class VideoChannel:
             if not should_update and self.current_resized is not None:
                 frame = self.current_resized
             else:
+                # Calculate current sequencer step (16 steps per 4 beats = 1 bar)
                 seq_step = int((beat_pos % 4.0) * 4) % 16
-                spd_mod_idx = self.seq_speed[seq_step]
-                seq_speed_mult = 1.0
-                if spd_mod_idx == 1: seq_speed_mult = 2.0
-                elif spd_mod_idx == 2: seq_speed_mult = 0.5
-                elif spd_mod_idx == 3: seq_speed_mult = -1.0
-                elif spd_mod_idx == 4: seq_speed_mult = 0.0
                 
-                scaled_beat_pos = beat_pos * self.speed
-                jmp_mod_idx = self.seq_jump[seq_step]
-                jump_offset_beats = 0.0
-                if jmp_mod_idx == 1: jump_offset_beats = -1.0
-                elif jmp_mod_idx == 2: jump_offset_beats = -4.0
-                
-                eff_beat_pos = scaled_beat_pos + (jump_offset_beats * self.speed)
+                # Get sequencer states for current step
                 is_stuttering = self.seq_stutter[seq_step]
+                spd_mod_idx = self.seq_speed[seq_step]
+                jmp_mod_idx = self.seq_jump[seq_step]
                 
-                if is_stuttering or spd_mod_idx == 4: 
-                    quantized_beat = int(eff_beat_pos * 16) / 16.0
-                    if self.beat_loop_enabled:
-                         loop_beats = self.loop_length_beats
-                         if loop_beats <= 0: loop_beats = 1.0
-                         prog = (quantized_beat % loop_beats) / loop_beats
-                         if self.reverse: prog = 1.0 - prog
-                         loop_frames = int(loop_beats * (60.0/bpm) * self.fps)
-                         base_start = self.loop_start_frame
-                         mod_offset = 0
-                         if self.loop_start_mod.enabled:
-                             mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
-                         fine_tune_offset = int((self.loop_start_mod.fine_tune / 100.0) * 0.01 * self.frame_count)
-                         target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
-                    else:
-                         seconds = quantized_beat * (60.0 / bpm)
-                         target_idx = int(seconds * self.fps) % self.frame_count
+                # Map speed sequencer values to multipliers
+                # 0=Gray (1x), 1=Yellow (2x), 2=Blue (0.5x), 3=Red (reverse), 4=Black (freeze)
+                seq_speed_mult = [1.0, 2.0, 0.5, -1.0, 0.0][spd_mod_idx]
                 
-                elif self.beat_loop_enabled:
+                # Calculate effective beat position with base speed applied
+                eff_beat_pos = beat_pos * self.speed
+                
+                # STUTTER SEQUENCER: Freeze at the start of the current step
+                if is_stuttering:
+                    # Quantize to step boundaries (16 steps per 4 beats)
+                    step_start_beat = (seq_step / 16.0) * 4.0
+                    eff_beat_pos = step_start_beat * self.speed
+                
+                # JUMP SEQUENCER: Offset the beat position backwards
+                # 0=Gray (no jump), 1=Yellow (-1 beat), 2=Red (-4 beats/1 bar)
+                if jmp_mod_idx == 1:
+                    eff_beat_pos -= 1.0 * self.speed
+                elif jmp_mod_idx == 2:
+                    eff_beat_pos -= 4.0 * self.speed
+                
+                # SPEED SEQUENCER: Apply speed multiplier
+                # Special cases: freeze (4) acts like stutter, reverse (3) handled differently per mode
+                if spd_mod_idx == 4:  # Freeze/Black - same as stutter
+                    step_start_beat = (seq_step / 16.0) * 4.0
+                    eff_beat_pos = step_start_beat * self.speed
+                
+                # Calculate target frame based on playback mode
+                if self.beat_loop_enabled:
+                    # Beat loop mode: calculate frame directly from beat position
                     loop_beats = self.loop_length_beats
                     if loop_beats <= 0: loop_beats = 1.0
-                    # Apply speed sequencer multiplier to beat position for loop progression
-                    # Use absolute value for magnitude; reverse direction is handled by eff_rev below
+                    
+                    # Apply speed multiplier (use absolute for magnitude)
                     speed_adjusted_beat = eff_beat_pos * abs(seq_speed_mult)
+                    
+                    # Calculate progress within loop
                     prog = (speed_adjusted_beat % loop_beats) / loop_beats
+                    
+                    # Handle reverse
                     eff_rev = self.reverse
-                    if spd_mod_idx == 3: eff_rev = not eff_rev
-                    if eff_rev: prog = 1.0 - prog
+                    if spd_mod_idx == 3:  # Reverse speed mode
+                        eff_rev = not eff_rev
+                    if eff_rev:
+                        prog = 1.0 - prog
+                    
+                    # Calculate frame index
                     loop_frames = int(loop_beats * (60.0 / bpm) * self.fps)
                     base_start = self.loop_start_frame
                     mod_offset = 0
@@ -771,14 +780,26 @@ class VideoChannel:
                     target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
                 
                 else:
+                    # Standard playback mode: use playback_position state
                     # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
                     speed_mod_value = self.speed_mod.get_value(beat_pos) if self.speed_mod.enabled else 0.0
                     effective_speed = self.speed * (1.0 + speed_mod_value * 8.0)
+                    
+                    # Calculate frame advancement with sequencer speed multiplier
                     frames_to_advance = delta_time * self.fps * effective_speed * seq_speed_mult
-                    if self.reverse: self.playback_position -= frames_to_advance
-                    else: self.playback_position += frames_to_advance
-                    if self.loop: self.playback_position %= self.frame_count
-                    else: self.playback_position = min(max(0, self.playback_position), self.frame_count - 1)
+                    
+                    # Advance or reverse playback position
+                    if self.reverse:
+                        self.playback_position -= frames_to_advance
+                    else:
+                        self.playback_position += frames_to_advance
+                    
+                    # Handle looping/clamping
+                    if self.loop:
+                        self.playback_position %= self.frame_count
+                    else:
+                        self.playback_position = min(max(0, self.playback_position), self.frame_count - 1)
+                    
                     target_idx = int(self.playback_position)
                 
                 target_idx = max(0, min(self.frame_count - 1, int(target_idx)))
