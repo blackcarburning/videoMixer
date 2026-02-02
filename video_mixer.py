@@ -1124,8 +1124,8 @@ class SequencerWidget(tk.Canvas):
         """Set step value directly on channel - avoids stale references"""
         if not (0 <= idx < 16):
             raise IndexError(f"Sequencer step index {idx} out of range (must be 0-15)")
-        if not isinstance(value, int) or value < 0:
-            raise ValueError(f"Sequencer step value {value} must be a non-negative integer")
+        if not isinstance(value, int) or not (0 <= value <= 4):
+            raise ValueError(f"Sequencer step value {value} must be an integer between 0-4")
         getattr(self.channel, self.attr_name)[idx] = value
 
     def on_click(self, event):
