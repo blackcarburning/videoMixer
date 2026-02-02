@@ -2241,6 +2241,11 @@ class VideoMixer:
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
             mc['dp'].set(m.depth)
             mc['inv'].set(m.invert)
+            # Update pos_only and neg_only if these controls exist (for rgb, blur, zoom, pixel)
+            if 'pos' in mc:
+                mc['pos'].set(m.pos_only)
+            if 'neg' in mc:
+                mc['neg'].set(m.neg_only)
         # Update fine tune control for loop start modulator
         if 'fine_tune' in c:
             c['fine_tune'].set(ch.loop_start_mod.fine_tune)
