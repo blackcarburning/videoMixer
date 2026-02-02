@@ -326,6 +326,11 @@ class VideoChannel:
     DEFAULT_ENVELOPE_TIME = 0.05
     GATE_TIMEBASE_VALUES = {"1/4": 0.25, "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0}
     
+    # Sequencer constants
+    STEPS_PER_BAR = 16
+    BEATS_PER_BAR = 4.0
+    SPEED_MULTIPLIERS = [1.0, 2.0, 0.5, -1.0, 0.0]  # Gray, Yellow, Blue, Red, Black
+    
     def __init__(self, target_width, target_height):
         self.video_path = None
         self.cap = None
@@ -718,28 +723,32 @@ class VideoChannel:
                 frame = self.current_resized
             else:
                 # Calculate current sequencer step (16 steps per 4 beats = 1 bar)
-                seq_step = int((beat_pos % 4.0) * 4) % 16
+                seq_step = int((beat_pos % self.BEATS_PER_BAR) * 4) % self.STEPS_PER_BAR
                 
                 # Get sequencer states for current step
                 is_stuttering = self.seq_stutter[seq_step]
                 spd_mod_idx = self.seq_speed[seq_step]
                 jmp_mod_idx = self.seq_jump[seq_step]
                 
-                # Map speed sequencer values to multipliers
+                # Map speed sequencer values to multipliers with bounds checking
                 # 0=Gray (1x), 1=Yellow (2x), 2=Blue (0.5x), 3=Red (reverse), 4=Black (freeze)
-                seq_speed_mult = [1.0, 2.0, 0.5, -1.0, 0.0][spd_mod_idx]
+                if 0 <= spd_mod_idx < len(self.SPEED_MULTIPLIERS):
+                    seq_speed_mult = self.SPEED_MULTIPLIERS[spd_mod_idx]
+                else:
+                    seq_speed_mult = 1.0  # Default to normal speed if invalid
                 
                 # Calculate effective beat position with base speed applied
                 eff_beat_pos = beat_pos * self.speed
                 
+                # Calculate step start beat once (used by stutter and freeze)
+                step_start_beat = (seq_step / float(self.STEPS_PER_BAR)) * self.BEATS_PER_BAR
+                
                 # STUTTER SEQUENCER: Freeze at the start of the current step (highest priority)
                 if is_stuttering:
-                    # Quantize to step boundaries (16 steps per 4 beats)
-                    step_start_beat = (seq_step / 16.0) * 4.0
+                    # Quantize to step boundaries
                     eff_beat_pos = step_start_beat * self.speed
                 # SPEED SEQUENCER: Freeze mode (acts like stutter)
                 elif spd_mod_idx == 4:  # Freeze/Black
-                    step_start_beat = (seq_step / 16.0) * 4.0
                     eff_beat_pos = step_start_beat * self.speed
                 else:
                     # JUMP SEQUENCER: Only apply when not stuttering/freezing
@@ -748,7 +757,7 @@ class VideoChannel:
                     if jmp_mod_idx == 1:
                         eff_beat_pos -= 1.0 * self.speed
                     elif jmp_mod_idx == 2:
-                        eff_beat_pos -= 4.0 * self.speed
+                        eff_beat_pos -= self.BEATS_PER_BAR * self.speed
                 
                 # Calculate target frame based on playback mode
                 if self.beat_loop_enabled:
