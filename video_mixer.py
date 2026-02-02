@@ -199,6 +199,7 @@ class Modulator:
         self.invert = False
         self.fwd_only = False
         self.rev_only = False
+        self.fine_tune = 0.0
         
     def get_value(self, beat_position):
         if not self.enabled or self.depth == 0:
@@ -234,7 +235,7 @@ class Modulator:
         return {'wave_type': self.wave_type, 'rate': self.rate, 'depth': self.depth, 
                 'phase': self.phase, 'enabled': self.enabled, 'pos_only': self.pos_only, 
                 'neg_only': self.neg_only, 'invert': self.invert, 'fwd_only': self.fwd_only, 
-                'rev_only': self.rev_only}
+                'rev_only': self.rev_only, 'fine_tune': self.fine_tune}
     
     def from_dict(self, d):
         self.wave_type = d.get('wave_type', 'sine')
@@ -247,6 +248,7 @@ class Modulator:
         self.invert = d.get('invert', False)
         self.fwd_only = d.get('fwd_only', False)
         self.rev_only = d.get('rev_only', False)
+        self.fine_tune = d.get('fine_tune', 0.0)
     
     def reset(self):
         self.wave_type = "sine"
@@ -259,6 +261,7 @@ class Modulator:
         self.invert = False
         self.fwd_only = False
         self.rev_only = False
+        self.fine_tune = 0.0
 
 class VideoChannel:
     SPEED_OPTIONS = {"1/6": 1/6, "1/4": 0.25, "1/3": 1/3, "1/2": 0.5, "2/3": 2/3, "3/4": 0.75,
@@ -628,7 +631,8 @@ class VideoChannel:
                          mod_offset = 0
                          if self.loop_start_mod.enabled:
                              mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
-                         target_idx = (base_start + mod_offset + int(prog * loop_frames)) % self.frame_count
+                         fine_tune_offset = int((self.loop_start_mod.fine_tune / 100.0) * 0.01 * self.frame_count)
+                         target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
                     else:
                          seconds = quantized_beat * (60.0 / bpm)
                          target_idx = int(seconds * self.fps) % self.frame_count
@@ -645,7 +649,8 @@ class VideoChannel:
                     mod_offset = 0
                     if self.loop_start_mod.enabled:
                         mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
-                    target_idx = (base_start + mod_offset + int(prog * loop_frames)) % self.frame_count
+                    fine_tune_offset = int((self.loop_start_mod.fine_tune / 100.0) * 0.01 * self.frame_count)
+                    target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
                 
                 else:
                     # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
@@ -1847,6 +1852,14 @@ class VideoMixer:
         lrow3.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(lrow3, text="Mod:", font=("Arial", 8)).pack(side=tk.LEFT)
         c['loop_start_mod'] = self.setup_mod_simple(lrow3, ch.loop_start_mod, "On")
+        lrow4 = ttk.Frame(lf)
+        lrow4.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(lrow4, text="Fine Tune:", font=("Arial", 8)).pack(side=tk.LEFT)
+        c['fine_tune'] = tk.DoubleVar(value=ch.loop_start_mod.fine_tune)
+        ttk.Scale(lrow4, from_=0, to=100, variable=c['fine_tune'], length=120, command=lambda v, ch=ch: setattr(ch.loop_start_mod, 'fine_tune', float(v))).pack(side=tk.LEFT)
+        c['fine_tune_lbl'] = ttk.Label(lrow4, text=f"{ch.loop_start_mod.fine_tune:.2f}", width=6)
+        c['fine_tune_lbl'].pack(side=tk.LEFT)
+        c['fine_tune'].trace_add('write', lambda *args: c['fine_tune_lbl'].config(text=f"{c['fine_tune'].get():.2f}"))
 
         fr_str = ttk.Frame(tab_fx)
         fr_str.pack(fill=tk.X, pady=2)
@@ -1901,28 +1914,30 @@ class VideoMixer:
         ttk.Label(fr_gli, text="Glitch:").pack(side=tk.LEFT)
         c['glitch'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_gli, from_=0.0, to=1.0, variable=c['glitch'], length=80, command=lambda v, ch=ch: setattr(ch, 'glitch_rate', float(v))).pack(side=tk.LEFT)
-        fr_rgb = ttk.Frame(tab_fx)
+
+        # Bonus Tab Effects
+        # Move LFO effects to Bonus tab for better 4:3 aspect ratio compatibility
+        fr_rgb = ttk.Frame(tab_bonus)
         fr_rgb.pack(fill=tk.X, pady=2)
         ttk.Label(fr_rgb, text="RGB LFO:").pack(side=tk.LEFT)
         c['rgb_mod'] = self.setup_mod(fr_rgb, ch.rgb_mod, "On")
-        fr_blur = ttk.Frame(tab_fx)
+        fr_blur = ttk.Frame(tab_bonus)
         fr_blur.pack(fill=tk.X, pady=2)
         ttk.Label(fr_blur, text="Blur LFO:").pack(side=tk.LEFT)
         c['blur_mod'] = self.setup_mod(fr_blur, ch.blur_mod, "On")
-        fr_zoom = ttk.Frame(tab_fx)
+        fr_zoom = ttk.Frame(tab_bonus)
         fr_zoom.pack(fill=tk.X, pady=2)
         ttk.Label(fr_zoom, text="Zoom LFO:").pack(side=tk.LEFT)
         c['zoom_mod'] = self.setup_mod(fr_zoom, ch.zoom_mod, "On")
-        fr_pix = ttk.Frame(tab_fx)
+        fr_pix = ttk.Frame(tab_bonus)
         fr_pix.pack(fill=tk.X, pady=2)
         ttk.Label(fr_pix, text="Pixel LFO:").pack(side=tk.LEFT)
         c['pixel_mod'] = self.setup_mod(fr_pix, ch.pixel_mod, "On")
-        fr_chroma = ttk.Frame(tab_fx)
+        fr_chroma = ttk.Frame(tab_bonus)
         fr_chroma.pack(fill=tk.X, pady=2)
         ttk.Label(fr_chroma, text="Chroma LFO:").pack(side=tk.LEFT)
         c['chroma_mod'] = self.setup_mod_simple(fr_chroma, ch.chroma_mod, "On")
 
-        # Bonus Tab Effects
         fr_kaleido = ttk.Frame(tab_bonus)
         fr_kaleido.pack(fill=tk.X, pady=2)
         ttk.Label(fr_kaleido, text="Kaleid:").pack(side=tk.LEFT)
@@ -1974,7 +1989,10 @@ class VideoMixer:
         rc.pack(side=tk.LEFT)
         rc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'rate', Modulator.RATE_OPTIONS.get(c['rt'].get(), 1.0)))
         c['dp'] = tk.DoubleVar(value=1.0)
-        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=30, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=80, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        c['dp_lbl'] = ttk.Label(mf, text=f"{1.0:.2f}", width=5)
+        c['dp_lbl'].pack(side=tk.LEFT)
+        c['dp'].trace_add('write', lambda *args: c['dp_lbl'].config(text=f"{c['dp'].get():.2f}"))
         c['inv'] = tk.BooleanVar(value=False)
         ttk.Checkbutton(mf, text="inv", variable=c['inv'], command=lambda: setattr(mod, 'invert', c['inv'].get())).pack(side=tk.LEFT)
         return c
@@ -1995,7 +2013,10 @@ class VideoMixer:
         rc.pack(side=tk.LEFT)
         rc.bind("<<ComboboxSelected>>", lambda e: setattr(mod, 'rate', Modulator.RATE_OPTIONS.get(c['rt'].get(), 1.0)))
         c['dp'] = tk.DoubleVar(value=1.0)
-        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=30, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        ttk.Scale(mf, from_=0, to=1, variable=c['dp'], length=80, command=lambda v: setattr(mod, 'depth', float(v))).pack(side=tk.LEFT)
+        c['dp_lbl'] = ttk.Label(mf, text=f"{1.0:.2f}", width=5)
+        c['dp_lbl'].pack(side=tk.LEFT)
+        c['dp'].trace_add('write', lambda *args: c['dp_lbl'].config(text=f"{c['dp'].get():.2f}"))
         c['pos'] = tk.BooleanVar(value=False)
         c['neg'] = tk.BooleanVar(value=False)
         c['inv'] = tk.BooleanVar(value=False)
@@ -2112,6 +2133,9 @@ class VideoMixer:
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
             mc['dp'].set(m.depth)
             mc['inv'].set(m.invert)
+        # Update fine tune control for loop start modulator
+        if 'fine_tune' in c:
+            c['fine_tune'].set(ch.loop_start_mod.fine_tune)
         if 'spd_fwd' in c:
             c['spd_fwd'].set(ch.speed_mod.fwd_only)
         if 'spd_rev' in c:
