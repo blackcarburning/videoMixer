@@ -184,30 +184,37 @@ class HighPrecisionMetronome:
             threading.Thread(target=self.play_click, args=(is_down,), daemon=True).start()
         self.current_beat = beat_pos
 
+# Snare sound generation constants
+SNARE_SAMPLE_RATE = 44100
+SNARE_DURATION_SEC = 0.15  # 150ms
+SNARE_TONE_FREQUENCY = 180  # Hz
+SNARE_NOISE_MIX = 0.7
+SNARE_TONE_MIX = 0.3
+SNARE_ENVELOPE_DECAY = 15
+SNARE_NORMALIZE_LEVEL = 0.6
+SNARE_BIT_DEPTH = 32767  # 16-bit audio
+
 def generate_snare_sound():
     """Generate a simple snare drum sound using white noise and sine wave"""
-    sample_rate = 44100
-    duration = 0.15  # 150ms
-    samples = int(sample_rate * duration)
+    samples = int(SNARE_SAMPLE_RATE * SNARE_DURATION_SEC)
     
     # Create white noise for the snare body
     noise = np.random.uniform(-1, 1, samples).astype(np.float32)
     
     # Add a short sine wave for the "snap"
-    tone_freq = 180
-    t = np.linspace(0, duration, samples, dtype=np.float32)
-    tone = np.sin(2 * np.pi * tone_freq * t).astype(np.float32)
+    t = np.linspace(0, SNARE_DURATION_SEC, samples, dtype=np.float32)
+    tone = np.sin(2 * np.pi * SNARE_TONE_FREQUENCY * t).astype(np.float32)
     
     # Mix noise and tone
-    mix = 0.7 * noise + 0.3 * tone
+    mix = SNARE_NOISE_MIX * noise + SNARE_TONE_MIX * tone
     
     # Apply envelope (quick attack, exponential decay)
-    envelope = np.exp(-t * 15).astype(np.float32)
+    envelope = np.exp(-t * SNARE_ENVELOPE_DECAY).astype(np.float32)
     snare = mix * envelope
     
     # Normalize and convert to 16-bit
-    snare = snare / np.max(np.abs(snare)) * 0.6
-    snare_16bit = (snare * 32767).astype(np.int16)
+    snare = snare / np.max(np.abs(snare)) * SNARE_NORMALIZE_LEVEL
+    snare_16bit = (snare * SNARE_BIT_DEPTH).astype(np.int16)
     
     # Create stereo sound
     stereo = np.column_stack((snare_16bit, snare_16bit))
