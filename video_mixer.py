@@ -9,7 +9,10 @@ import threading
 import time
 import os
 import json
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 import queue
 import random
 import ctypes
@@ -168,7 +171,7 @@ class HighPrecisionMetronome:
 
     def play_click(self, is_downbeat=False):
         try:
-            if self.enabled:
+            if self.enabled and winsound is not None:
                 winsound.Beep(self.high_freq if is_downbeat else self.low_freq, self.duration)
         except:
             pass
@@ -346,6 +349,7 @@ class VideoChannel:
         self.kaleidoscope_mod.rate = 0.5
         self.kaleidoscope_mod.depth = 1.0
         self.vignette_amount = 0.0
+        self.vignette_transparency = 0.5
         self.vignette_mod = Modulator()
         self.vignette_mod.wave_type = "sine"
         self.vignette_mod.rate = 0.25
@@ -387,6 +391,8 @@ class VideoChannel:
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
              'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
              'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
+             'kaleidoscope_amount': self.kaleidoscope_amount, 'vignette_amount': self.vignette_amount,
+             'vignette_transparency': self.vignette_transparency, 'color_shift_amount': self.color_shift_amount,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
              'beat_loop_enabled': self.beat_loop_enabled, 
@@ -398,7 +404,9 @@ class VideoChannel:
              'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict(),
              'chroma_mod': self.chroma_mod.to_dict(), 'mosh_mod': self.mosh_mod.to_dict(),
              'echo_mod': self.echo_mod.to_dict(), 'slicer_mod': self.slicer_mod.to_dict(),
-             'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict()}
+             'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict(),
+             'kaleidoscope_mod': self.kaleidoscope_mod.to_dict(), 'vignette_mod': self.vignette_mod.to_dict(),
+             'color_shift_mod': self.color_shift_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -421,6 +429,10 @@ class VideoChannel:
             self.mosh_amount = d.get('mosh_amount', 0.0)
             self.echo_amount = d.get('echo_amount', 0.0)
             self.slicer_amount = d.get('slicer_amount', 0.0)
+            self.kaleidoscope_amount = d.get('kaleidoscope_amount', 0.0)
+            self.vignette_amount = d.get('vignette_amount', 0.0)
+            self.vignette_transparency = d.get('vignette_transparency', 0.5)
+            self.color_shift_amount = d.get('color_shift_amount', 0.0)
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -428,7 +440,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -478,6 +490,10 @@ class VideoChannel:
             self.mosh_amount = 0.0
             self.echo_amount = 0.0
             self.slicer_amount = 0.0
+            self.kaleidoscope_amount = 0.0
+            self.vignette_amount = 0.0
+            self.vignette_transparency = 0.5
+            self.color_shift_amount = 0.0
             self.seq_gate = [1] * 16
             self.seq_stutter = [0] * 16
             self.seq_speed = [0] * 16
@@ -841,9 +857,18 @@ class VideoChannel:
             distances = distances / max_dist
             
             # Create vignette mask (smooth falloff)
-            radius = 1.0 - (effective_vignette * 0.5)
+            # Allow vignette to extend all the way to center
+            radius = 1.0 - effective_vignette
+            if radius < 0.01:
+                radius = 0.01  # Prevent radius from becoming zero for safe division below
             vignette_mask = np.clip(1.0 - (distances - radius) / (1.0 - radius), 0, 1)
             vignette_mask = vignette_mask ** 2
+            
+            # Apply transparency control to determine vignette strength
+            # Note: Higher transparency value = stronger/more opaque vignette effect
+            # At transparency=1.0: full vignette effect (most opaque)
+            # At transparency=0.0: minimal vignette effect (most transparent)
+            vignette_mask = 1.0 - (1.0 - vignette_mask) * self.vignette_transparency
             
             # Apply vignette
             for i in range(3):
@@ -1515,6 +1540,7 @@ class VideoMixer:
             c['slicer'].set(0.0)
             c['kaleidoscope'].set(0.0)
             c['vignette'].set(0.0)
+            c['vignette_transparency'].set(0.5)
             c['color_shift'].set(0.0)
             if ch.frame_count > 0:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
@@ -1953,6 +1979,16 @@ class VideoMixer:
         ttk.Scale(fr_vignette, from_=0.0, to=1.0, variable=c['vignette'], length=80,
                   command=lambda v, ch=ch: setattr(ch, 'vignette_amount', float(v))).pack(side=tk.LEFT)
         c['vignette_mod'] = self.setup_mod_simple(fr_vignette, ch.vignette_mod, "LFO")
+
+        fr_vignette_trans = ttk.Frame(tab_bonus)
+        fr_vignette_trans.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_vignette_trans, text="Vig Trans:").pack(side=tk.LEFT)
+        c['vignette_transparency'] = tk.DoubleVar(value=0.5)
+        ttk.Scale(fr_vignette_trans, from_=0.0, to=1.0, variable=c['vignette_transparency'], length=80,
+                  command=lambda v, ch=ch: setattr(ch, 'vignette_transparency', float(v))).pack(side=tk.LEFT)
+        c['vignette_trans_lbl'] = ttk.Label(fr_vignette_trans, text="0.50", width=5)
+        c['vignette_trans_lbl'].pack(side=tk.LEFT)
+        c['vignette_transparency'].trace_add('write', lambda *args: c['vignette_trans_lbl'].config(text=f"{c['vignette_transparency'].get():.2f}"))
 
         fr_colorshift = ttk.Frame(tab_bonus)
         fr_colorshift.pack(fill=tk.X, pady=2)
