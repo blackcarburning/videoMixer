@@ -1055,7 +1055,7 @@ class VideoChannel:
                         o = o * attack_progress
                     elif self.gate_decay > 0:
                         # After attack (or no attack), apply decay if enabled - fade out
-                        time_since_attack = time_in_step - attack_time_sec if self.gate_attack > 0 else time_in_step
+                        time_since_attack = max(0, time_in_step - attack_time_sec) if self.gate_attack > 0 else time_in_step
                         decay_time_sec = self._normalize_envelope_time(self.gate_decay)
                         decay_progress = min(1.0, time_since_attack / decay_time_sec)
                         o = o * (1.0 - decay_progress)
