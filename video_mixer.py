@@ -1039,28 +1039,30 @@ class VideoChannel:
                             pass
                 self.last_gate_step = seq_step
             
-            if not gate_on:
-                if self.gate_envelope_enabled and self.gate_decay > 0:
-                    # Apply decay envelope when gate turns off
+            if gate_on:
+                if self.gate_envelope_enabled and (self.gate_attack > 0 or self.gate_decay > 0):
+                    # Apply envelope when gate is ON
                     step_duration_sec = self._get_step_duration_seconds(bpm)
                     step_pos = self._get_step_position(beat_pos)
+                    time_in_step = step_pos * step_duration_sec
                     
-                    # Calculate decay (gate is OFF, so apply release/decay)
-                    decay_time_sec = self._normalize_envelope_time(self.gate_decay)
-                    decay_progress = min(1.0, (step_pos * step_duration_sec) / decay_time_sec)
-                    o = o * (1.0 - decay_progress)
-                else:
-                    # No envelope - hard off, set opacity to 0
-                    o = 0.0
-            elif self.gate_envelope_enabled and self.gate_attack > 0:
-                # Apply attack envelope when gate turns on
-                step_duration_sec = self._get_step_duration_seconds(bpm)
-                step_pos = self._get_step_position(beat_pos)
-                
-                # Calculate attack
-                attack_time_sec = self._normalize_envelope_time(self.gate_attack)
-                attack_progress = min(1.0, (step_pos * step_duration_sec) / attack_time_sec)
-                o = o * attack_progress
+                    # Calculate attack time
+                    attack_time_sec = self._normalize_envelope_time(self.gate_attack)
+                    
+                    if self.gate_attack > 0 and time_in_step < attack_time_sec:
+                        # Within attack phase - fade in
+                        attack_progress = min(1.0, time_in_step / attack_time_sec)
+                        o = o * attack_progress
+                    elif self.gate_decay > 0:
+                        # After attack (or no attack), apply decay if enabled - fade out
+                        time_since_attack = max(0, time_in_step - attack_time_sec) if self.gate_attack > 0 else time_in_step
+                        decay_time_sec = self._normalize_envelope_time(self.gate_decay)
+                        decay_progress = min(1.0, time_since_attack / decay_time_sec)
+                        o = o * (1.0 - decay_progress)
+                    # else: stay at full opacity (attack complete, no decay)
+            else:
+                # Gate is OFF - set opacity to 0
+                o = 0.0
             
         b = max(-1.0, min(1.0, b))
         c = max(0.1, min(3.0, c))
