@@ -492,6 +492,8 @@ class VideoChannel:
             self.reverse = False
             self.glitch_rate = 0.0
             self.strobe_enabled = False
+            self.strobe_rate = 0.125
+            self.strobe_color = "white"
             self.posterize_rate = 0.0
             self.mirror_mode = "Off"
             self.mosh_amount = 0.0
@@ -1617,40 +1619,8 @@ class VideoMixer:
             if cap_opened and video_path:
                 ch.load_video(video_path)
             
-            # Update UI controls to reflect reset values
-            c['br_v'].set(0)
-            c['co_v'].set(1)
-            c['sa_v'].set(1)
-            c['op_v'].set(1)
-            c['sp_v'].set("1")
-            c['loop'].set(True)
-            c['rev'].set(False)
-            c['glitch'].set(0.0)
-            c['bl_en'].set(False)
-            c['bl_len_var'].set("1 bar")
-            c['bl_start'].set(0)
-            c['strobe_en'].set(False)
-            c['strobe_rt'].set("1/8")
-            c['post_rt'].set("Off")
-            c['mirror_mode'].set("Off")
-            c['mosh'].set(0.0)
-            c['echo'].set(0.0)
-            c['slicer'].set(0.0)
-            c['kaleidoscope'].set(0.0)
-            c['vignette'].set(0.0)
-            c['vignette_transparency'].set(0.5)
-            c['color_shift'].set(0.0)
-            c['spin'].set(0.0)
-            if ch.frame_count > 0:
-                c['bl_lbl'].config(text=f"0/{ch.frame_count}")
-            for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
-                self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'mosh_mod', 'echo_mod', 'slicer_mod']:
-                self.reset_mod(c[k])
-            c['seq_gate_w'].update_ui()
-            c['seq_stutter_w'].update_ui()
-            c['seq_speed_w'].update_ui()
-            c['seq_jump_w'].update_ui()
+            # Update all UI controls to reflect reset values
+            self.update_ch_ui(ch, c)
         
         # Reset mixer parameters
         self.mix_var.set(0.5)
@@ -1661,6 +1631,12 @@ class VideoMixer:
         self.blend_mode = "normal"
         self.mbright.set(0)
         self.mcontr.set(1)
+        
+        # Reset metronome controls
+        self.metro_var.set(False)
+        self.metronome.enabled = False
+        self.mvol.set(0.5)
+        
         self.status.set("Parameters Reset (Videos Kept)")
 
     def setup_ui(self):
@@ -2256,13 +2232,20 @@ class VideoMixer:
                      (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod'),
                      (ch.chroma_mod, 'chroma_mod'), (ch.mosh_mod, 'mosh_mod'), 
                      (ch.echo_mod, 'echo_mod'), (ch.slicer_mod, 'slicer_mod'),
-                     (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod')]:
+                     (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod'),
+                     (ch.kaleidoscope_mod, 'kaleidoscope_mod'), (ch.vignette_mod, 'vignette_mod'),
+                     (ch.color_shift_mod, 'color_shift_mod'), (ch.spin_mod, 'spin_mod')]:
             mc = c[k]
             mc['en'].set(m.enabled)
             mc['wv'].set(m.wave_type)
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
             mc['dp'].set(m.depth)
             mc['inv'].set(m.invert)
+            # Update pos_only and neg_only if these controls exist (for rgb, blur, zoom, pixel)
+            if 'pos' in mc:
+                mc['pos'].set(m.pos_only)
+            if 'neg' in mc:
+                mc['neg'].set(m.neg_only)
         # Update fine tune control for loop start modulator
         if 'fine_tune' in c:
             c['fine_tune'].set(ch.loop_start_mod.fine_tune)
