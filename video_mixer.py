@@ -1619,6 +1619,29 @@ class VideoMixer:
             if cap_opened and video_path:
                 ch.load_video(video_path)
             
+            # Reset Bonus tab UI controls
+            c['kaleidoscope'].set(0.0)
+            c['vignette'].set(0.0)
+            c['vignette_transparency'].set(0.5)
+            c['color_shift'].set(0.0)
+            c['spin'].set(0.0)
+            # Reset all mod controls on bonus tab
+            for mod_key in ['rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 
+                            'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
+                if mod_key in c:
+                    self.reset_mod(c[mod_key])
+            
+            # Reset Seq tab UI controls
+            # The underlying data is reset by reset_controls(), but we need to update the UI
+            c['seq_gate_w'].steps[:] = [1] * 16
+            c['seq_gate_w'].update_ui()
+            c['seq_stutter_w'].steps[:] = [0] * 16
+            c['seq_stutter_w'].update_ui()
+            c['seq_speed_w'].steps[:] = [0] * 16
+            c['seq_speed_w'].update_ui()
+            c['seq_jump_w'].steps[:] = [0] * 16
+            c['seq_jump_w'].update_ui()
+            
             # Update all UI controls to reflect reset values
             self.update_ch_ui(ch, c)
         
@@ -2219,6 +2242,12 @@ class VideoMixer:
         if ch.frame_count > 0:
             c['bl_slider'].config(to=max(1, ch.frame_count - 1))
             c['bl_lbl'].config(text=f"{ch.loop_start_frame}/{ch.frame_count}")
+        # Update Bonus tab sliders
+        c['kaleidoscope'].set(ch.kaleidoscope_amount)
+        c['vignette'].set(ch.vignette_amount)
+        c['vignette_transparency'].set(ch.vignette_transparency)
+        c['color_shift'].set(ch.color_shift_amount)
+        c['spin'].set(ch.spin_amount)
         for k, m in [('br', ch.brightness_mod), ('co', ch.contrast_mod), ('sa', ch.saturation_mod), ('op', ch.opacity_mod)]:
             mc = c[f'{k}_m']
             mc['en'].set(m.enabled)
