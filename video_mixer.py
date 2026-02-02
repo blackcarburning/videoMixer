@@ -735,7 +735,7 @@ class VideoChannel:
                 is_stuttering = self.seq_stutter[seq_step]
                 
                 if is_stuttering or spd_mod_idx == 4: 
-                    quantized_beat = int(eff_beat_pos * 4) / 4.0
+                    quantized_beat = int(eff_beat_pos * 16) / 16.0
                     if self.beat_loop_enabled:
                          loop_beats = self.loop_length_beats
                          if loop_beats <= 0: loop_beats = 1.0
@@ -755,7 +755,9 @@ class VideoChannel:
                 elif self.beat_loop_enabled:
                     loop_beats = self.loop_length_beats
                     if loop_beats <= 0: loop_beats = 1.0
-                    prog = (eff_beat_pos % loop_beats) / loop_beats
+                    # Apply speed sequencer multiplier to beat position for loop progression
+                    speed_adjusted_beat = eff_beat_pos * seq_speed_mult
+                    prog = (speed_adjusted_beat % loop_beats) / loop_beats
                     eff_rev = self.reverse
                     if spd_mod_idx == 3: eff_rev = not eff_rev
                     if eff_rev: prog = 1.0 - prog
