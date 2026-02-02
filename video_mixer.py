@@ -221,12 +221,8 @@ def generate_snare_sound():
     
     return pygame.sndarray.make_sound(stereo)
 
-# Pre-generate snare sound
+# Snare sound will be lazily initialized after pygame.mixer is ready
 SNARE_SOUND = None
-try:
-    SNARE_SOUND = generate_snare_sound()
-except Exception as e:
-    print(f"Failed to generate snare sound: {e}")
 
 class Modulator:
     RATE_OPTIONS = {"1/32": 0.03125, "1/16": 0.0625, "1/8": 0.125, "1/4": 0.25, "1/2": 0.5,
@@ -1021,11 +1017,21 @@ class VideoChannel:
         gate_on = self.seq_gate[seq_step]
         
         # Trigger snare sound on gate transitions
-        if self.gate_snare_enabled and gate_on and seq_step != self.last_gate_step and SNARE_SOUND:
-            try:
-                SNARE_SOUND.play()
-            except:
-                pass
+        if self.gate_snare_enabled and gate_on and seq_step != self.last_gate_step:
+            global SNARE_SOUND
+            # Lazy initialization if not already done
+            if SNARE_SOUND is None:
+                try:
+                    if pygame.mixer.get_init():
+                        SNARE_SOUND = generate_snare_sound()
+                except Exception as e:
+                    print(f"Failed to generate snare sound: {e}")
+            
+            if SNARE_SOUND:
+                try:
+                    SNARE_SOUND.play()
+                except:
+                    pass
         self.last_gate_step = seq_step
         
         if not gate_on:
@@ -1068,6 +1074,12 @@ class VideoChannel:
             if phase < 0.5:
                 if self.strobe_color == 'white': frame = np.ones_like(frame)
                 else: frame = np.zeros_like(frame)
+        
+        # Apply opacity to frame (for gate sequencer and envelope)
+        if o < 1.0:
+            if not frame.flags['WRITEABLE']:
+                frame = frame.copy()
+            frame = frame * o
                     
         return frame, o
 
@@ -1624,6 +1636,16 @@ class VideoMixer:
         self.channel_b = VideoChannel(self.preview_width, self.preview_height)
         
         self.audio_track = AudioChannel()
+        
+        # Initialize snare sound after pygame.mixer is ready
+        global SNARE_SOUND
+        if SNARE_SOUND is None:
+            try:
+                if pygame.mixer.get_init():
+                    SNARE_SOUND = generate_snare_sound()
+            except Exception as e:
+                print(f"Failed to generate snare sound: {e}")
+        
         self.global_loop_enabled = True
         self.global_loop_start = 0  # Now in beats instead of bars
         self.global_loop_end = 16   # 4 bars * 4 beats_per_bar = 16 beats
