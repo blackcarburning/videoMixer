@@ -359,6 +359,11 @@ class VideoChannel:
         self.color_shift_mod.wave_type = "triangle"
         self.color_shift_mod.rate = 1.0
         self.color_shift_mod.depth = 1.0
+        self.spin_amount = 0.0
+        self.spin_mod = Modulator()
+        self.spin_mod.wave_type = "sine"
+        self.spin_mod.rate = 1.0
+        self.spin_mod.depth = 1.0
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -406,7 +411,8 @@ class VideoChannel:
              'echo_mod': self.echo_mod.to_dict(), 'slicer_mod': self.slicer_mod.to_dict(),
              'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict(),
              'kaleidoscope_mod': self.kaleidoscope_mod.to_dict(), 'vignette_mod': self.vignette_mod.to_dict(),
-             'color_shift_mod': self.color_shift_mod.to_dict()}
+             'color_shift_mod': self.color_shift_mod.to_dict(), 'spin_amount': self.spin_amount,
+             'spin_mod': self.spin_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -433,6 +439,7 @@ class VideoChannel:
             self.vignette_amount = d.get('vignette_amount', 0.0)
             self.vignette_transparency = d.get('vignette_transparency', 0.5)
             self.color_shift_amount = d.get('color_shift_amount', 0.0)
+            self.spin_amount = d.get('spin_amount', 0.0)
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -440,7 +447,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -546,6 +553,11 @@ class VideoChannel:
             self.color_shift_mod.wave_type = "triangle"
             self.color_shift_mod.rate = 1.0
             self.color_shift_mod.depth = 1.0
+            self.spin_amount = 0.0
+            self.spin_mod.reset()
+            self.spin_mod.wave_type = "sine"
+            self.spin_mod.rate = 1.0
+            self.spin_mod.depth = 1.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -895,6 +907,20 @@ class VideoChannel:
             frame_uint8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
             # Convert back to float32
             frame = frame_uint8.astype(np.float32) / 255.0
+
+        # Spin effect - rotation from center
+        effective_spin = self.spin_amount
+        if self.spin_mod.enabled:
+            mod_val = self.spin_mod.get_value(beat_pos)
+            effective_spin = self.spin_amount * mod_val
+
+        if abs(effective_spin) > 0.01:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            # Rotation angle based on spin amount (e.g., -180 to 180 degrees)
+            angle = effective_spin * 180.0
+            M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+            frame = cv2.warpAffine(frame, M, (w, h))
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -1542,11 +1568,12 @@ class VideoMixer:
             c['vignette'].set(0.0)
             c['vignette_transparency'].set(0.5)
             c['color_shift'].set(0.0)
+            c['spin'].set(0.0)
             if ch.frame_count > 0:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
             for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
                 self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod']:
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
                 self.reset_mod(c[k])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
@@ -1575,6 +1602,66 @@ class VideoMixer:
         self.audio_track.enabled = True
         self.latency_ms.set(0.0)
         self.status.set("Reset")
+
+    def reset_parameters(self):
+        """Reset all parameters but keep videos loaded"""
+        for ch, c in [(self.channel_a, self.ch_a), (self.channel_b, self.ch_b)]:
+            # Store the video path and loaded state before reset
+            video_path = ch.video_path
+            cap_opened = ch.cap is not None and ch.cap.isOpened() if ch.cap else False
+            
+            # Reset all controls (this resets parameters to defaults)
+            ch.reset_controls()
+            
+            # Restore video if it was loaded
+            if cap_opened and video_path:
+                ch.load_video(video_path)
+            
+            # Update UI controls to reflect reset values
+            c['br_v'].set(0)
+            c['co_v'].set(1)
+            c['sa_v'].set(1)
+            c['op_v'].set(1)
+            c['sp_v'].set("1")
+            c['loop'].set(True)
+            c['rev'].set(False)
+            c['glitch'].set(0.0)
+            c['bl_en'].set(False)
+            c['bl_len_var'].set("1 bar")
+            c['bl_start'].set(0)
+            c['strobe_en'].set(False)
+            c['strobe_rt'].set("1/8")
+            c['post_rt'].set("Off")
+            c['mirror_mode'].set("Off")
+            c['mosh'].set(0.0)
+            c['echo'].set(0.0)
+            c['slicer'].set(0.0)
+            c['kaleidoscope'].set(0.0)
+            c['vignette'].set(0.0)
+            c['vignette_transparency'].set(0.5)
+            c['color_shift'].set(0.0)
+            c['spin'].set(0.0)
+            if ch.frame_count > 0:
+                c['bl_lbl'].config(text=f"0/{ch.frame_count}")
+            for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
+                self.reset_mod(c[f'{k}_m'])
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'mosh_mod', 'echo_mod', 'slicer_mod']:
+                self.reset_mod(c[k])
+            c['seq_gate_w'].update_ui()
+            c['seq_stutter_w'].update_ui()
+            c['seq_speed_w'].update_ui()
+            c['seq_jump_w'].update_ui()
+        
+        # Reset mixer parameters
+        self.mix_var.set(0.5)
+        self.mix = 0.5
+        self.mix_mod.reset()
+        self.reset_mod(self.mix_mod_c)
+        self.blend_var.set("normal")
+        self.blend_mode = "normal"
+        self.mbright.set(0)
+        self.mcontr.set(1)
+        self.status.set("Parameters Reset (Videos Kept)")
 
     def setup_ui(self):
         main = ttk.Frame(self.root, padding="5")
@@ -1649,6 +1736,7 @@ class VideoMixer:
         tk.Button(row3, text="Stop", command=self.stop, font=("Arial", 11), width=8).pack(side=tk.LEFT, padx=2)
         tk.Button(row3, text="Rew", command=self.rewind, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
         tk.Button(row3, text="Reset", command=self.reset_all, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Param Reset", command=self.reset_parameters, font=("Arial", 11), width=10).pack(side=tk.LEFT, padx=2)
         
         ttk.Label(row3, text="Offset (ms):").pack(side=tk.LEFT, padx=(10, 5))
         self.latency_ms = tk.DoubleVar(value=0.0)
@@ -1940,6 +2028,12 @@ class VideoMixer:
         ttk.Label(fr_gli, text="Glitch:").pack(side=tk.LEFT)
         c['glitch'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_gli, from_=0.0, to=1.0, variable=c['glitch'], length=80, command=lambda v, ch=ch: setattr(ch, 'glitch_rate', float(v))).pack(side=tk.LEFT)
+        fr_spin = ttk.Frame(tab_fx)
+        fr_spin.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_spin, text="Spin:").pack(side=tk.LEFT)
+        c['spin'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_spin, from_=0.0, to=1.0, variable=c['spin'], length=80, command=lambda v, ch=ch: setattr(ch, 'spin_amount', float(v))).pack(side=tk.LEFT)
+        c['spin_mod'] = self.setup_mod_simple(fr_spin, ch.spin_mod, "LFO")
 
         # Bonus Tab Effects
         # Move LFO effects to Bonus tab for better 4:3 aspect ratio compatibility
