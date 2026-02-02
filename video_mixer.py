@@ -1095,7 +1095,6 @@ class SequencerWidget(tk.Canvas):
         self.channel = channel
         self.attr_name = attr_name
         self.mode = mode 
-        self.steps = getattr(channel, attr_name)
         self.rects = []
         self.bind("<Button-1>", self.on_click)
         if self.mode == "toggle": self.colors = ["#444", "#0f0"]
@@ -1109,24 +1108,39 @@ class SequencerWidget(tk.Canvas):
         start_x = 30
         for i in range(16):
             x = start_x + i * w
-            val = self.steps[i]
+            val = self.get_step(i)
             if val >= len(self.colors): val = 0
             r = self.create_rectangle(x, 2, x + w - 1, 2 + h, fill=self.colors[val], outline="black")
             self.rects.append(r)
             if i % 4 == 0: self.create_line(x, 0, x, 25, fill="#777")
+
+    def get_step(self, idx):
+        """Get step value directly from channel - avoids stale references"""
+        if not (0 <= idx < 16):
+            raise IndexError(f"Sequencer step index {idx} out of range (must be 0-15)")
+        return getattr(self.channel, self.attr_name)[idx]
+    
+    def set_step(self, idx, value):
+        """Set step value directly on channel - avoids stale references"""
+        if not (0 <= idx < 16):
+            raise IndexError(f"Sequencer step index {idx} out of range (must be 0-15)")
+        if not isinstance(value, int) or not (0 <= value <= 4):
+            raise ValueError(f"Sequencer step value {value} must be an integer between 0-4")
+        getattr(self.channel, self.attr_name)[idx] = value
 
     def on_click(self, event):
         x = event.x - 30
         if x < 0: return
         idx = x // 15
         if 0 <= idx < 16:
-            current = self.steps[idx]
+            current = self.get_step(idx)
             nxt = (current + 1) % len(self.colors)
-            self.steps[idx] = nxt
+            self.set_step(idx, nxt)
             self.update_ui()
+    
     def update_ui(self):
         for i, r in enumerate(self.rects):
-            val = self.steps[i]
+            val = self.get_step(i)
             if val >= len(self.colors): val = 0
             self.itemconfigure(r, fill=self.colors[val])
 
@@ -1779,14 +1793,10 @@ class VideoMixer:
                     self.reset_mod(c[mod_key])
             
             # Reset Seq tab UI controls
-            # The underlying data is reset by reset_controls(), but we need to update the UI
-            c['seq_gate_w'].steps[:] = [1] * 16
+            # The underlying data is reset by reset_controls(), and widgets query channel directly
             c['seq_gate_w'].update_ui()
-            c['seq_stutter_w'].steps[:] = [0] * 16
             c['seq_stutter_w'].update_ui()
-            c['seq_speed_w'].steps[:] = [0] * 16
             c['seq_speed_w'].update_ui()
-            c['seq_jump_w'].steps[:] = [0] * 16
             c['seq_jump_w'].update_ui()
             
             # Update all UI controls to reflect reset values
