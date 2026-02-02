@@ -352,6 +352,7 @@ class VideoChannel:
         self.seq_stutter = [0] * 16
         self.seq_speed = [0] * 16
         self.seq_jump = [0] * 16
+        self.gate_enabled = True
         self.gate_snare_enabled = False
         self.gate_envelope_enabled = False
         self.gate_attack = 0.0
@@ -471,7 +472,7 @@ class VideoChannel:
              'vignette_transparency': self.vignette_transparency, 'color_shift_amount': self.color_shift_amount,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
-             'gate_snare_enabled': self.gate_snare_enabled, 'gate_envelope_enabled': self.gate_envelope_enabled,
+             'gate_enabled': self.gate_enabled, 'gate_snare_enabled': self.gate_snare_enabled, 'gate_envelope_enabled': self.gate_envelope_enabled,
              'gate_attack': self.gate_attack, 'gate_decay': self.gate_decay, 'gate_timebase': self.gate_timebase,
              'beat_loop_enabled': self.beat_loop_enabled, 
              'loop_length_beats': self.loop_length_beats,
@@ -517,6 +518,7 @@ class VideoChannel:
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
             self.seq_jump = d.get('seq_jump', [0]*16)
+            self.gate_enabled = d.get('gate_enabled', True)
             self.gate_snare_enabled = d.get('gate_snare_enabled', False)
             self.gate_envelope_enabled = d.get('gate_envelope_enabled', False)
             self.gate_attack = d.get('gate_attack', 0.0)
@@ -585,6 +587,7 @@ class VideoChannel:
             self.seq_stutter = [0] * 16
             self.seq_speed = [0] * 16
             self.seq_jump = [0] * 16
+            self.gate_enabled = True
             self.gate_snare_enabled = False
             self.gate_envelope_enabled = False
             self.gate_attack = 0.0
@@ -1013,48 +1016,53 @@ class VideoChannel:
         o = self.opacity + self.opacity_mod.get_value(beat_pos) * 0.5
         
         # Gate sequencer with timebase support
-        seq_step = self._get_gate_step(beat_pos)
-        gate_on = self.seq_gate[seq_step]
-        
-        # Trigger snare sound on gate transitions
-        if self.gate_snare_enabled and gate_on and seq_step != self.last_gate_step:
-            global SNARE_SOUND
-            # Lazy initialization if not already done
-            if SNARE_SOUND is None:
-                try:
-                    if pygame.mixer.get_init():
-                        SNARE_SOUND = generate_snare_sound()
-                except Exception as e:
-                    print(f"Failed to generate snare sound: {e}")
+        if self.gate_enabled:
+            seq_step = self._get_gate_step(beat_pos)
+            gate_on = self.seq_gate[seq_step]
             
-            if SNARE_SOUND:
-                try:
-                    SNARE_SOUND.play()
-                except:
-                    pass
-        self.last_gate_step = seq_step
-        
-        if not gate_on:
-            if self.gate_envelope_enabled:
-                # Apply decay envelope when gate turns off
+            # Trigger snare sound on gate transitions
+            if seq_step != self.last_gate_step:
+                # Step changed
+                if self.gate_snare_enabled and gate_on == 1:
+                    # New step has gate ON - fire snare
+                    global SNARE_SOUND
+                    # Lazy initialization if not already done
+                    if SNARE_SOUND is None:
+                        try:
+                            if pygame.mixer.get_init():
+                                SNARE_SOUND = generate_snare_sound()
+                        except Exception as e:
+                            print(f"Failed to generate snare sound: {e}")
+                    
+                    if SNARE_SOUND:
+                        try:
+                            SNARE_SOUND.play()
+                        except:
+                            pass
+                self.last_gate_step = seq_step
+            
+            if not gate_on:
+                if self.gate_envelope_enabled:
+                    # Apply decay envelope when gate turns off
+                    step_duration_sec = self._get_step_duration_seconds(bpm)
+                    step_pos = self._get_step_position(beat_pos)
+                    
+                    # Calculate decay (gate is OFF, so apply release/decay)
+                    decay_time_sec = self._normalize_envelope_time(self.gate_decay)
+                    decay_progress = min(1.0, (step_pos * step_duration_sec) / decay_time_sec)
+                    o = o * (1.0 - decay_progress)
+                else:
+                    # No envelope - hard off, set opacity to 0
+                    o = 0.0
+            elif self.gate_envelope_enabled:
+                # Apply attack envelope when gate turns on
                 step_duration_sec = self._get_step_duration_seconds(bpm)
                 step_pos = self._get_step_position(beat_pos)
                 
-                # Calculate decay (gate is OFF, so apply release/decay)
-                decay_time_sec = self._normalize_envelope_time(self.gate_decay)
-                decay_progress = min(1.0, (step_pos * step_duration_sec) / decay_time_sec)
-                o = o * (1.0 - decay_progress)
-            else:
-                o = 0.0
-        elif self.gate_envelope_enabled:
-            # Apply attack envelope when gate turns on
-            step_duration_sec = self._get_step_duration_seconds(bpm)
-            step_pos = self._get_step_position(beat_pos)
-            
-            # Calculate attack
-            attack_time_sec = self._normalize_envelope_time(self.gate_attack)
-            attack_progress = min(1.0, (step_pos * step_duration_sec) / attack_time_sec)
-            o = o * attack_progress
+                # Calculate attack
+                attack_time_sec = self._normalize_envelope_time(self.gate_attack)
+                attack_progress = min(1.0, (step_pos * step_duration_sec) / attack_time_sec)
+                o = o * attack_progress
             
         b = max(-1.0, min(1.0, b))
         c = max(0.1, min(3.0, c))
@@ -2232,6 +2240,13 @@ class VideoMixer:
                   command=lambda v, ch=ch: setattr(ch, 'color_shift_amount', float(v))).pack(side=tk.LEFT)
         c['color_shift_mod'] = self.setup_mod_simple(fr_colorshift, ch.color_shift_mod, "LFO")
 
+        # Gate enable checkbox
+        gate_enable_frame = ttk.Frame(tab_seq)
+        gate_enable_frame.pack(fill=tk.X, pady=2)
+        c['gate_enabled'] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(gate_enable_frame, text="Gate On", variable=c['gate_enabled'], 
+                       command=lambda: setattr(ch, 'gate_enabled', c['gate_enabled'].get())).pack(side=tk.LEFT, padx=5)
+
         c['seq_gate_w'] = SequencerWidget(tab_seq, ch, 'seq_gate', "Gate", "toggle")
         c['seq_gate_w'].pack(pady=5)
         
@@ -2473,6 +2488,8 @@ class VideoMixer:
         c['seq_speed_w'].update_ui()
         c['seq_jump_w'].update_ui()
         # Update gate sequencer controls
+        if 'gate_enabled' in c:
+            c['gate_enabled'].set(ch.gate_enabled)
         if 'gate_snare' in c:
             c['gate_snare'].set(ch.gate_snare_enabled)
         if 'gate_env' in c:
