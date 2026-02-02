@@ -324,8 +324,7 @@ class VideoChannel:
     DEFAULT_BPM = 120.0
     MIN_ENVELOPE_TIME = 0.01
     DEFAULT_ENVELOPE_TIME = 0.05
-    GATE_TIMEBASE_VALUES = {"1/32": 0.03125, "1/16": 0.0625, "1/8": 0.125, "1/4": 0.25, 
-                            "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0}
+    GATE_TIMEBASE_VALUES = {"1/4": 0.25, "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0}
     
     def __init__(self, target_width, target_height):
         self.video_path = None
@@ -1018,11 +1017,10 @@ class VideoChannel:
         # Gate sequencer with timebase support
         if self.gate_enabled:
             seq_step = self._get_gate_step(beat_pos)
-            gate_on = self.seq_gate[seq_step]
+            gate_on = (self.seq_gate[seq_step] == 1)
             
-            # Trigger snare sound on gate transitions
+            # Trigger snare sound on gate transitions (rising edge only)
             if seq_step != self.last_gate_step:
-                # Step changed
                 if self.gate_snare_enabled and gate_on:
                     # New step has gate ON - fire snare
                     global SNARE_SOUND
@@ -1039,10 +1037,10 @@ class VideoChannel:
                             SNARE_SOUND.play()
                         except:
                             pass
-            self.last_gate_step = seq_step
+                self.last_gate_step = seq_step
             
             if not gate_on:
-                if self.gate_envelope_enabled:
+                if self.gate_envelope_enabled and self.gate_decay > 0:
                     # Apply decay envelope when gate turns off
                     step_duration_sec = self._get_step_duration_seconds(bpm)
                     step_pos = self._get_step_position(beat_pos)
@@ -1054,7 +1052,7 @@ class VideoChannel:
                 else:
                     # No envelope - hard off, set opacity to 0
                     o = 0.0
-            elif self.gate_envelope_enabled:
+            elif self.gate_envelope_enabled and self.gate_attack > 0:
                 # Apply attack envelope when gate turns on
                 step_duration_sec = self._get_step_duration_seconds(bpm)
                 step_pos = self._get_step_position(beat_pos)
