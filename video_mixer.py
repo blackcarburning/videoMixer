@@ -1544,6 +1544,8 @@ class VideoMixer:
         if 'pos' in c: c['pos'].set(False)
         if 'neg' in c: c['neg'].set(False)
         c['inv'].set(False)
+        if 'spd_fwd' in c: c['spd_fwd'].set(False)
+        if 'spd_rev' in c: c['spd_rev'].set(False)
 
     def reset_all(self):
         for ch, c in [(self.channel_a, self.ch_a), (self.channel_b, self.ch_b)]:
