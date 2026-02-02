@@ -317,6 +317,11 @@ class VideoChannel:
     POSTERIZE_RATES = {"Off": 0.0, "1/16": 0.0625, "1/8": 0.125, "1/4": 0.25, "1/2": 0.5, "1 bt": 1.0}
     MIRROR_MODES = ["Off", "Horizontal", "Vertical", "Quad", "Kaleido"]
     
+    # Gate sequencer constants
+    DEFAULT_BPM = 120.0
+    MIN_ENVELOPE_TIME = 0.01
+    DEFAULT_ENVELOPE_TIME = 0.05
+    
     def __init__(self, target_width, target_height):
         self.video_path = None
         self.cap = None
@@ -431,6 +436,17 @@ class VideoChannel:
             self.echo_buffer = None
             self.slicer_buffer = None
             self.kaleidoscope_buffer = None
+    
+    def _get_gate_step(self, beat_pos):
+        """Calculate the current gate sequencer step based on beat position and timebase"""
+        return int((beat_pos % self.gate_timebase) * (16.0 / self.gate_timebase)) % 16
+    
+    def _get_step_timing(self, bpm):
+        """Calculate step duration and position for envelope calculations"""
+        step_duration_beats = self.gate_timebase / 16.0
+        beat_duration_sec = 60.0 / (bpm if bpm > 0 else self.DEFAULT_BPM)
+        step_duration_sec = step_duration_beats * beat_duration_sec
+        return step_duration_sec
     
     def to_dict(self, include_video=False):
         d = {'brightness': self.brightness, 'contrast': self.contrast, 'saturation': self.saturation,
@@ -985,7 +1001,7 @@ class VideoChannel:
         o = self.opacity + self.opacity_mod.get_value(beat_pos) * 0.5
         
         # Gate sequencer with timebase support
-        seq_step = int((beat_pos % self.gate_timebase) * (16.0 / self.gate_timebase)) % 16
+        seq_step = self._get_gate_step(beat_pos)
         gate_on = self.seq_gate[seq_step]
         
         # Trigger snare sound on gate transitions
@@ -999,30 +1015,26 @@ class VideoChannel:
         if not gate_on:
             if self.gate_envelope_enabled:
                 # Apply decay envelope when gate turns off
-                step_duration_beats = self.gate_timebase / 16.0
-                beat_duration_sec = 60.0 / (bpm if bpm > 0 else 120.0)
-                step_duration_sec = step_duration_beats * beat_duration_sec
+                step_duration_sec = self._get_step_timing(bpm)
                 
                 # Position within current step (0.0 to 1.0)
                 step_pos = ((beat_pos % self.gate_timebase) * (16.0 / self.gate_timebase)) % 1.0
                 
                 # Calculate decay (gate is OFF, so apply release/decay)
-                decay_time_sec = self.gate_decay if self.gate_decay > 0.01 else 0.05
+                decay_time_sec = self.gate_decay if self.gate_decay > self.MIN_ENVELOPE_TIME else self.DEFAULT_ENVELOPE_TIME
                 decay_progress = min(1.0, (step_pos * step_duration_sec) / decay_time_sec)
                 o = o * (1.0 - decay_progress)
             else:
                 o = 0.0
         elif self.gate_envelope_enabled:
             # Apply attack envelope when gate turns on
-            step_duration_beats = self.gate_timebase / 16.0
-            beat_duration_sec = 60.0 / (bpm if bpm > 0 else 120.0)
-            step_duration_sec = step_duration_beats * beat_duration_sec
+            step_duration_sec = self._get_step_timing(bpm)
             
             # Position within current step (0.0 to 1.0)
             step_pos = ((beat_pos % self.gate_timebase) * (16.0 / self.gate_timebase)) % 1.0
             
             # Calculate attack
-            attack_time_sec = self.gate_attack if self.gate_attack > 0.01 else 0.05
+            attack_time_sec = self.gate_attack if self.gate_attack > self.MIN_ENVELOPE_TIME else self.DEFAULT_ENVELOPE_TIME
             attack_progress = min(1.0, (step_pos * step_duration_sec) / attack_time_sec)
             o = o * attack_progress
             
