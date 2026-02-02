@@ -582,10 +582,10 @@ class VideoChannel:
             self.vignette_amount = 0.0
             self.vignette_transparency = 0.5
             self.color_shift_amount = 0.0
-            self.seq_gate = [1] * 16
-            self.seq_stutter = [0] * 16
-            self.seq_speed = [0] * 16
-            self.seq_jump = [0] * 16
+            self.seq_gate[:] = [1] * 16
+            self.seq_stutter[:] = [0] * 16
+            self.seq_speed[:] = [0] * 16
+            self.seq_jump[:] = [0] * 16
             self.gate_enabled = True
             self.gate_snare_enabled = False
             self.gate_envelope_enabled = False
