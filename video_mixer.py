@@ -1573,7 +1573,7 @@ class VideoMixer:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
             for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
                 self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
+            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'mosh_mod', 'echo_mod', 'slicer_mod']:
                 self.reset_mod(c[k])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
