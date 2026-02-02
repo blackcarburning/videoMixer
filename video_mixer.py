@@ -860,13 +860,14 @@ class VideoChannel:
             # Allow vignette to extend all the way to center
             radius = 1.0 - effective_vignette
             if radius < 0.01:
-                radius = 0.01  # Prevent division by zero
+                radius = 0.01  # Prevent radius from becoming zero for safe division below
             vignette_mask = np.clip(1.0 - (distances - radius) / (1.0 - radius), 0, 1)
             vignette_mask = vignette_mask ** 2
             
-            # Apply transparency control - blend between original and vignette effect
-            # At transparency=1.0 (max), use full vignette effect
-            # At transparency=0.0 (min), barely any vignette
+            # Apply transparency control to determine vignette strength
+            # Note: Higher transparency value = stronger/more opaque vignette effect
+            # At transparency=1.0: full vignette effect (most opaque)
+            # At transparency=0.0: minimal vignette effect (most transparent)
             vignette_mask = 1.0 - (1.0 - vignette_mask) * self.vignette_transparency
             
             # Apply vignette
