@@ -996,8 +996,8 @@ class VideoChannel:
             result[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1)   # Blue right
             result[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)  # Red left
         
-        # Block-based transparency using Kronecker product for efficient upscaling
-        block_mask = np.kron(self.dis_glitch_blocks < amount, np.ones((block_size, block_size), dtype=bool))
+        # Block-based transparency using np.repeat (more memory-efficient than kron)
+        block_mask = np.repeat(np.repeat(self.dis_glitch_blocks < amount, block_size, axis=0), block_size, axis=1)
         block_mask = block_mask[:h, :w]  # Trim to frame size
         
         # Apply transparency to glitched blocks
