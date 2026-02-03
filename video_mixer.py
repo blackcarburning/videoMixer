@@ -978,30 +978,26 @@ class VideoChannel:
         """Blocks fragment with RGB separation - VECTORIZED"""
         if amount <= 0:
             return frame
-        h, w = frame.shape[:2]
+        
         result = frame.copy()
         
-        block_size = max(8, int(32 * (1 - amount * 0.8)))  # Minimum 8 for performance
-        
-        # Create block-level random mask - use ceiling division to cover full frame
-        num_blocks_y = (h + block_size - 1) // block_size
-        num_blocks_x = (w + block_size - 1) // block_size
-        
-        if self.dis_glitch_blocks is None or self.dis_glitch_blocks.shape[:2] != (num_blocks_y, num_blocks_x):
-            self.dis_glitch_blocks = np.random.random((num_blocks_y, num_blocks_x)).astype(np.float32)
-        
-        # Simple RGB separation instead of block displacement
+        # Simple RGB channel separation (fast, no loops)
         shift = int(amount * 15)
         if shift > 0:
             result[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1)   # Blue right
             result[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)  # Red left
         
-        # Block-based transparency using np.repeat (more memory-efficient than kron)
-        block_mask = np.repeat(np.repeat(self.dis_glitch_blocks < amount, block_size, axis=0), block_size, axis=1)
-        block_mask = block_mask[:h, :w]  # Trim to frame size
-        
-        # Apply transparency to glitched blocks
-        result[block_mask] = result[block_mask] * (1 - amount * 0.3)
+        # Add some vertical displacement for glitch effect
+        v_shift = int(amount * 20)
+        if v_shift > 0:
+            # Shift random horizontal bands
+            h, w = frame.shape[:2]
+            band_height = max(4, h // 20)
+            for i in range(0, h, band_height * 2):
+                if np.random.random() < amount:
+                    h_offset = int((np.random.random() - 0.5) * amount * 50)
+                    end = min(i + band_height, h)
+                    result[i:end] = np.roll(result[i:end], h_offset, axis=1)
         
         return result
     
@@ -1090,26 +1086,25 @@ class VideoChannel:
         if self.dis_rain_offsets is None or len(self.dis_rain_offsets) != w:
             self.dis_rain_offsets = np.random.random(w).astype(np.float32)
         
-        # Calculate all offsets at once
+        # Calculate all offsets at once (vectorized)
         offsets = (self.dis_rain_offsets * h * amount).astype(np.int32)
-        max_offset = offsets.max()
         
-        if max_offset <= 0:
-            return frame
-        
-        # Create row indices for each column
+        # Create row indices
         row_indices = np.arange(h).reshape(-1, 1)
+        
+        # Calculate source rows for each column (vectorized shift)
+        source_rows = (row_indices - offsets.reshape(1, -1)) % h
+        
+        # Create column indices for advanced indexing
         col_indices = np.arange(w).reshape(1, -1)
+        col_indices = np.broadcast_to(col_indices, (h, w))
         
-        # Calculate source rows (where to pull pixels from)
-        source_rows = (row_indices - offsets) % h
-        
-        # Apply the shift - advanced indexing creates a new array (no need for prior copy)
+        # Apply the vectorized shift
         result = frame[source_rows, col_indices]
         
-        # Black out the top portion based on offset - fully vectorized
-        mask = row_indices < offsets
-        result[mask] = 0
+        # Create mask for top black portions (vectorized)
+        row_mask = row_indices < offsets.reshape(1, -1)
+        result[row_mask] = 0
         
         return result
 
