@@ -421,6 +421,42 @@ class VideoChannel:
         self.spin_mod.wave_type = "sine"
         self.spin_mod.rate = 1.0
         self.spin_mod.depth = 1.0
+        
+        # Disintegration effects
+        self.dis_particle_enabled = False
+        self.dis_particle_amount = 0.0
+        self.dis_particle_mode = "LFO"  # "LFO" or "Loop Time"
+        self.dis_particle_mod = Modulator()
+        
+        self.dis_thanos_enabled = False
+        self.dis_thanos_amount = 0.0
+        self.dis_thanos_mode = "LFO"
+        self.dis_thanos_mod = Modulator()
+        
+        self.dis_glitch_enabled = False
+        self.dis_glitch_amount = 0.0
+        self.dis_glitch_mode = "LFO"
+        self.dis_glitch_mod = Modulator()
+        
+        self.dis_scatter_enabled = False
+        self.dis_scatter_amount = 0.0
+        self.dis_scatter_mode = "LFO"
+        self.dis_scatter_mod = Modulator()
+        
+        self.dis_ember_enabled = False
+        self.dis_ember_amount = 0.0
+        self.dis_ember_mode = "LFO"
+        self.dis_ember_mod = Modulator()
+        
+        self.dis_rain_enabled = False
+        self.dis_rain_amount = 0.0
+        self.dis_rain_mode = "LFO"
+        self.dis_rain_mod = Modulator()
+        
+        # Pre-generate noise patterns for effects
+        self.dis_noise_pattern = None
+        self.dis_rain_offsets = None
+        
         self.loop = True
         self.playback_position = 0.0
         self.beat_loop_enabled = False
@@ -490,7 +526,19 @@ class VideoChannel:
              'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict(),
              'kaleidoscope_mod': self.kaleidoscope_mod.to_dict(), 'vignette_mod': self.vignette_mod.to_dict(),
              'color_shift_mod': self.color_shift_mod.to_dict(), 'spin_amount': self.spin_amount,
-             'spin_mod': self.spin_mod.to_dict()}
+             'spin_mod': self.spin_mod.to_dict(),
+             'dis_particle_enabled': self.dis_particle_enabled, 'dis_particle_amount': self.dis_particle_amount,
+             'dis_particle_mode': self.dis_particle_mode, 'dis_particle_mod': self.dis_particle_mod.to_dict(),
+             'dis_thanos_enabled': self.dis_thanos_enabled, 'dis_thanos_amount': self.dis_thanos_amount,
+             'dis_thanos_mode': self.dis_thanos_mode, 'dis_thanos_mod': self.dis_thanos_mod.to_dict(),
+             'dis_glitch_enabled': self.dis_glitch_enabled, 'dis_glitch_amount': self.dis_glitch_amount,
+             'dis_glitch_mode': self.dis_glitch_mode, 'dis_glitch_mod': self.dis_glitch_mod.to_dict(),
+             'dis_scatter_enabled': self.dis_scatter_enabled, 'dis_scatter_amount': self.dis_scatter_amount,
+             'dis_scatter_mode': self.dis_scatter_mode, 'dis_scatter_mod': self.dis_scatter_mod.to_dict(),
+             'dis_ember_enabled': self.dis_ember_enabled, 'dis_ember_amount': self.dis_ember_amount,
+             'dis_ember_mode': self.dis_ember_mode, 'dis_ember_mod': self.dis_ember_mod.to_dict(),
+             'dis_rain_enabled': self.dis_rain_enabled, 'dis_rain_amount': self.dis_rain_amount,
+             'dis_rain_mode': self.dis_rain_mode, 'dis_rain_mod': self.dis_rain_mod.to_dict()}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -518,6 +566,27 @@ class VideoChannel:
             self.vignette_transparency = d.get('vignette_transparency', 0.5)
             self.color_shift_amount = d.get('color_shift_amount', 0.0)
             self.spin_amount = d.get('spin_amount', 0.0)
+            
+            # Disintegration effects
+            self.dis_particle_enabled = d.get('dis_particle_enabled', False)
+            self.dis_particle_amount = d.get('dis_particle_amount', 0.0)
+            self.dis_particle_mode = d.get('dis_particle_mode', 'LFO')
+            self.dis_thanos_enabled = d.get('dis_thanos_enabled', False)
+            self.dis_thanos_amount = d.get('dis_thanos_amount', 0.0)
+            self.dis_thanos_mode = d.get('dis_thanos_mode', 'LFO')
+            self.dis_glitch_enabled = d.get('dis_glitch_enabled', False)
+            self.dis_glitch_amount = d.get('dis_glitch_amount', 0.0)
+            self.dis_glitch_mode = d.get('dis_glitch_mode', 'LFO')
+            self.dis_scatter_enabled = d.get('dis_scatter_enabled', False)
+            self.dis_scatter_amount = d.get('dis_scatter_amount', 0.0)
+            self.dis_scatter_mode = d.get('dis_scatter_mode', 'LFO')
+            self.dis_ember_enabled = d.get('dis_ember_enabled', False)
+            self.dis_ember_amount = d.get('dis_ember_amount', 0.0)
+            self.dis_ember_mode = d.get('dis_ember_mode', 'LFO')
+            self.dis_rain_enabled = d.get('dis_rain_enabled', False)
+            self.dis_rain_amount = d.get('dis_rain_amount', 0.0)
+            self.dis_rain_mode = d.get('dis_rain_mode', 'LFO')
+            
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
@@ -531,7 +600,7 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
+            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'dis_particle_mod', 'dis_thanos_mod', 'dis_glitch_mod', 'dis_scatter_mod', 'dis_ember_mod', 'dis_rain_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -650,6 +719,32 @@ class VideoChannel:
             self.spin_mod.wave_type = "sine"
             self.spin_mod.rate = 1.0
             self.spin_mod.depth = 1.0
+            
+            # Reset disintegration effects
+            self.dis_particle_enabled = False
+            self.dis_particle_amount = 0.0
+            self.dis_particle_mode = "LFO"
+            self.dis_particle_mod.reset()
+            self.dis_thanos_enabled = False
+            self.dis_thanos_amount = 0.0
+            self.dis_thanos_mode = "LFO"
+            self.dis_thanos_mod.reset()
+            self.dis_glitch_enabled = False
+            self.dis_glitch_amount = 0.0
+            self.dis_glitch_mode = "LFO"
+            self.dis_glitch_mod.reset()
+            self.dis_scatter_enabled = False
+            self.dis_scatter_amount = 0.0
+            self.dis_scatter_mode = "LFO"
+            self.dis_scatter_mod.reset()
+            self.dis_ember_enabled = False
+            self.dis_ember_amount = 0.0
+            self.dis_ember_mode = "LFO"
+            self.dis_ember_mod.reset()
+            self.dis_rain_enabled = False
+            self.dis_rain_amount = 0.0
+            self.dis_rain_mode = "LFO"
+            self.dis_rain_mod.reset()
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -706,6 +801,183 @@ class VideoChannel:
             bot = cv2.flip(top, 0)
             return np.vstack([top, bot])
         return frame
+    
+    def _get_dis_amount(self, mode, base_amount, modulator, beat_pos):
+        """Get disintegration amount based on mode"""
+        if mode == "Loop Time":
+            # Amount follows position in current bar (0-4 beats = 0-1)
+            return (beat_pos % 4.0) / 4.0
+        else:
+            # LFO mode
+            if modulator.enabled:
+                return max(0, min(1, base_amount + modulator.get_value(beat_pos)))
+            return base_amount
+    
+    def _apply_particle_dissolve(self, frame, amount, beat_pos):
+        """Pixels break into particles that fall away"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        result = frame.copy()
+        
+        # Create threshold mask based on amount
+        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
+            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        
+        # Pixels below threshold dissolve
+        mask = self.dis_noise_pattern > amount
+        
+        # Add falling offset to dissolved pixels
+        offset = int(amount * h * 0.3)
+        dissolved = np.roll(frame, offset, axis=0)
+        dissolved[:offset, :] = 0
+        
+        result[~mask] = dissolved[~mask]
+        result[~mask] = (result[~mask] * (1 - amount * 0.5)).astype(np.uint8) if result.dtype == np.uint8 else result[~mask] * (1 - amount * 0.5)
+        
+        return result
+    
+    def _apply_thanos_snap(self, frame, amount, beat_pos):
+        """Random pixels turn to dust and blow away"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        result = frame.copy()
+        
+        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
+            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        
+        # Threshold determines which pixels are "snapped"
+        mask = self.dis_noise_pattern > amount
+        
+        # Dissolved pixels get scattered horizontally
+        scatter_x = int(amount * 50)
+        scattered = np.roll(frame, scatter_x, axis=1)
+        
+        result[~mask] = 0  # Snapped pixels disappear
+        
+        return result
+    
+    def _apply_glitch_dissolve(self, frame, amount, beat_pos):
+        """Blocks fragment with RGB separation"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        result = frame.copy()
+        
+        block_size = max(4, int(32 * (1 - amount * 0.8)))
+        
+        for y in range(0, h, block_size):
+            for x in range(0, w, block_size):
+                if np.random.random() < amount:
+                    # Offset this block
+                    ox = int((np.random.random() - 0.5) * amount * 100)
+                    oy = int((np.random.random() - 0.5) * amount * 50)
+                    
+                    y2, x2 = min(y + block_size, h), min(x + block_size, w)
+                    ny, nx = max(0, min(y + oy, h - block_size)), max(0, min(x + ox, w - block_size))
+                    
+                    block = frame[y:y2, x:x2].copy()
+                    # RGB separation
+                    if len(block.shape) >= 3 and block.shape[2] >= 3:
+                        block[:, :, 0] = np.roll(block[:, :, 0], int(amount * 10), axis=1)
+                        block[:, :, 2] = np.roll(block[:, :, 2], -int(amount * 10), axis=1)
+                    
+                    result[y:y2, x:x2] = block
+        
+        return result
+    
+    def _apply_pixel_scatter(self, frame, amount, beat_pos):
+        """Pixels explode outward from center"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        result = np.zeros_like(frame)
+        
+        cy, cx = h // 2, w // 2
+        
+        # Create coordinate grids
+        y_coords, x_coords = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+        
+        # Calculate scatter direction from center
+        dy = (y_coords - cy).astype(np.float32)
+        dx = (x_coords - cx).astype(np.float32)
+        
+        # Normalize and apply scatter
+        dist = np.sqrt(dx**2 + dy**2) + 1
+        scatter_amount = amount * 100
+        
+        new_y = (y_coords - (dy / dist * scatter_amount * np.random.random((h, w)))).astype(np.int32)
+        new_x = (x_coords - (dx / dist * scatter_amount * np.random.random((h, w)))).astype(np.int32)
+        
+        # Clamp coordinates
+        new_y = np.clip(new_y, 0, h - 1)
+        new_x = np.clip(new_x, 0, w - 1)
+        
+        result = frame[new_y, new_x]
+        
+        # Fade based on amount
+        result = (result * (1 - amount * 0.7)).astype(frame.dtype)
+        
+        return result
+    
+    def _apply_ash_ember(self, frame, amount, beat_pos):
+        """Edges dissolve with glowing ember effect"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        
+        # Edge detection
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        edges = cv2.Canny(gray, 50, 150)
+        
+        # Dilate edges based on amount
+        kernel_size = max(1, int(amount * 20))
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        edge_mask = cv2.dilate(edges, kernel, iterations=1)
+        
+        result = frame.copy()
+        
+        # Create ember glow (orange/red)
+        ember = np.zeros_like(frame)
+        ember[:, :, 2] = 255  # Red
+        ember[:, :, 1] = 100  # Some green for orange tint
+        
+        # Apply dissolution at edges
+        edge_mask_3d = edge_mask[:, :, np.newaxis] / 255.0
+        
+        # Blend ember into edges
+        result = (result * (1 - edge_mask_3d * amount) + ember * edge_mask_3d * amount).astype(frame.dtype)
+        
+        # Random pixel removal at edges
+        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
+            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        
+        dissolve_mask = (edge_mask > 0) & (self.dis_noise_pattern < amount)
+        result[dissolve_mask] = 0
+        
+        return result
+    
+    def _apply_digital_rain(self, frame, amount, beat_pos):
+        """Pixels fall like Matrix rain"""
+        if amount <= 0:
+            return frame
+        h, w = frame.shape[:2]
+        
+        # Initialize rain offsets per column
+        if self.dis_rain_offsets is None or len(self.dis_rain_offsets) != w:
+            self.dis_rain_offsets = np.random.random(w).astype(np.float32)
+        
+        result = frame.copy()
+        
+        for x in range(w):
+            # Each column falls at different speed
+            offset = int((self.dis_rain_offsets[x] + amount) * h * amount)
+            if offset > 0:
+                result[:, x] = np.roll(frame[:, x], offset, axis=0)
+                result[:offset, x] = 0  # Top becomes black
+        
+        return result
 
     def get_frame(self, beat_pos, delta_time, bpm, bpb):
         if not self.cap or self.frame_count == 0:
@@ -1040,6 +1312,31 @@ class VideoChannel:
             angle = effective_spin * 180.0
             M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
             frame = cv2.warpAffine(frame, M, (w, h))
+        
+        # Disintegration effects processing
+        if self.dis_particle_enabled:
+            amt = self._get_dis_amount(self.dis_particle_mode, self.dis_particle_amount, self.dis_particle_mod, beat_pos)
+            frame = self._apply_particle_dissolve(frame, amt, beat_pos)
+        
+        if self.dis_thanos_enabled:
+            amt = self._get_dis_amount(self.dis_thanos_mode, self.dis_thanos_amount, self.dis_thanos_mod, beat_pos)
+            frame = self._apply_thanos_snap(frame, amt, beat_pos)
+        
+        if self.dis_glitch_enabled:
+            amt = self._get_dis_amount(self.dis_glitch_mode, self.dis_glitch_amount, self.dis_glitch_mod, beat_pos)
+            frame = self._apply_glitch_dissolve(frame, amt, beat_pos)
+        
+        if self.dis_scatter_enabled:
+            amt = self._get_dis_amount(self.dis_scatter_mode, self.dis_scatter_amount, self.dis_scatter_mod, beat_pos)
+            frame = self._apply_pixel_scatter(frame, amt, beat_pos)
+        
+        if self.dis_ember_enabled:
+            amt = self._get_dis_amount(self.dis_ember_mode, self.dis_ember_amount, self.dis_ember_mod, beat_pos)
+            frame = self._apply_ash_ember(frame, amt, beat_pos)
+        
+        if self.dis_rain_enabled:
+            amt = self._get_dis_amount(self.dis_rain_mode, self.dis_rain_amount, self.dis_rain_mod, beat_pos)
+            frame = self._apply_digital_rain(frame, amt, beat_pos)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -2089,11 +2386,13 @@ class VideoMixer:
         tab_fx = ttk.Frame(nb, padding=5)
         tab_seq = ttk.Frame(nb, padding=5)
         tab_bonus = ttk.Frame(nb, padding=5)
+        tab_dis = ttk.Frame(nb, padding=5)
         nb.add(tab_main, text="Main")
         nb.add(tab_loop, text="Loop/Time")
         nb.add(tab_fx, text="FX")
         nb.add(tab_seq, text="Seq")
         nb.add(tab_bonus, text="Bonus")
+        nb.add(tab_dis, text="DIS")
         
         row1 = ttk.Frame(tab_main)
         row1.pack(fill=tk.X, pady=2)
@@ -2342,6 +2641,65 @@ class VideoMixer:
         c['seq_speed_w'].pack(pady=5)
         c['seq_jump_w'] = SequencerWidget(tab_seq, ch, 'seq_jump', "Jump (Y=-1bt, R=-1bar)", "multi_jump")
         c['seq_jump_w'].pack(pady=5)
+        
+        # DIS (Disintegration) Tab
+        # Helper function to create a disintegration effect control
+        def setup_dis_effect(parent, effect_name, label_text):
+            frame = ttk.Frame(parent)
+            frame.pack(fill=tk.X, pady=2)
+            
+            # Enable checkbox
+            c[f'{effect_name}_en'] = tk.BooleanVar(value=False)
+            ttk.Checkbutton(frame, text=label_text, variable=c[f'{effect_name}_en'], 
+                          command=lambda: setattr(ch, f'{effect_name}_enabled', c[f'{effect_name}_en'].get())).pack(side=tk.LEFT)
+            
+            # Amount slider
+            c[f'{effect_name}_amt'] = tk.DoubleVar(value=0.0)
+            ttk.Scale(frame, from_=0.0, to=1.0, variable=c[f'{effect_name}_amt'], length=80,
+                     command=lambda v: setattr(ch, f'{effect_name}_amount', float(v))).pack(side=tk.LEFT)
+            
+            # Mode dropdown
+            c[f'{effect_name}_mode'] = tk.StringVar(value="LFO")
+            mode_combo = ttk.Combobox(frame, textvariable=c[f'{effect_name}_mode'], 
+                                     values=["LFO", "Loop Time"], state="readonly", width=8)
+            mode_combo.pack(side=tk.LEFT, padx=2)
+            mode_combo.bind("<<ComboboxSelected>>", 
+                           lambda e: setattr(ch, f'{effect_name}_mode', c[f'{effect_name}_mode'].get()))
+            
+            # LFO controls frame
+            lfo_frame = ttk.Frame(frame)
+            lfo_frame.pack(side=tk.LEFT, padx=2)
+            
+            # LFO enable
+            mod_obj = getattr(ch, f'{effect_name}_mod')
+            c[f'{effect_name}_lfo_en'] = tk.BooleanVar(value=False)
+            ttk.Checkbutton(lfo_frame, text="LFO", variable=c[f'{effect_name}_lfo_en'],
+                          command=lambda: setattr(mod_obj, 'enabled', c[f'{effect_name}_lfo_en'].get())).pack(side=tk.LEFT)
+            
+            # LFO wave type
+            c[f'{effect_name}_wave'] = tk.StringVar(value="sine")
+            wave_combo = ttk.Combobox(lfo_frame, textvariable=c[f'{effect_name}_wave'],
+                                     values=Modulator.WAVE_TYPES, state="readonly", width=6)
+            wave_combo.pack(side=tk.LEFT)
+            wave_combo.bind("<<ComboboxSelected>>", 
+                          lambda e: setattr(mod_obj, 'wave_type', c[f'{effect_name}_wave'].get()))
+            
+            # LFO rate
+            c[f'{effect_name}_rate'] = tk.StringVar(value="1")
+            rate_combo = ttk.Combobox(lfo_frame, textvariable=c[f'{effect_name}_rate'],
+                                     values=list(Modulator.RATE_OPTIONS.keys()), state="readonly", width=4)
+            rate_combo.pack(side=tk.LEFT)
+            rate_combo.bind("<<ComboboxSelected>>",
+                          lambda e: setattr(mod_obj, 'rate', Modulator.RATE_OPTIONS.get(c[f'{effect_name}_rate'].get(), 1.0)))
+        
+        # Create controls for each disintegration effect
+        setup_dis_effect(tab_dis, 'dis_particle', 'Particle:')
+        setup_dis_effect(tab_dis, 'dis_thanos', 'Thanos:')
+        setup_dis_effect(tab_dis, 'dis_glitch', 'Glitch:')
+        setup_dis_effect(tab_dis, 'dis_scatter', 'Scatter:')
+        setup_dis_effect(tab_dis, 'dis_ember', 'Ember:')
+        setup_dis_effect(tab_dis, 'dis_rain', 'Rain:')
+        
         return c
     
     def setup_mod_simple(self, parent, mod, label):
