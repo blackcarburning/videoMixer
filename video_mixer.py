@@ -872,32 +872,9 @@ class VideoChannel:
             return np.vstack([top, bot])
         return frame
     
-    def _get_dis_amount(self, mode, base_amount, modulator, beat_pos, 
-                        trigger_enabled=False, trigger_beat=0, 
-                        trigger_active=False, trigger_start_beat=0):
+    def _get_dis_amount(self, mode, base_amount, modulator, beat_pos):
         """Get disintegration amount based on mode"""
-        
-        # Trigger mode takes priority
-        if trigger_enabled:
-            # Calculate beat position within loop
-            loop_beat = beat_pos % 64  # Assuming max 64 beat loops
-            
-            # Check if we should trigger (handled in get_frame, just return calculated amount here)
-            if trigger_active:
-                # Calculate progress (use base_amount as duration in beats)
-                duration_beats = max(0.25, base_amount * 4)  # 0-1 maps to 0.25-4 beats
-                elapsed = beat_pos - trigger_start_beat
-                progress = min(1.0, elapsed / duration_beats)
-                
-                if progress >= 1.0:
-                    # Effect complete, reset (handled in get_frame)
-                    return 0.0
-                
-                return progress
-            
-            return 0.0  # Not triggered yet
-        
-        elif mode == "Loop Time":
+        if mode == "Loop Time":
             # Amount follows position in current bar (0-4 beats = 0-1)
             return (beat_pos % 4.0) / 4.0
         else:
