@@ -427,31 +427,55 @@ class VideoChannel:
         self.dis_particle_amount = 0.0
         self.dis_particle_mode = "LFO"  # "LFO" or "Loop Time"
         self.dis_particle_mod = Modulator()
+        self.dis_particle_trigger_enabled = False
+        self.dis_particle_trigger_beat = 0
+        self.dis_particle_trigger_active = False
+        self.dis_particle_trigger_start_beat = 0
         
         self.dis_thanos_enabled = False
         self.dis_thanos_amount = 0.0
         self.dis_thanos_mode = "LFO"
         self.dis_thanos_mod = Modulator()
+        self.dis_thanos_trigger_enabled = False
+        self.dis_thanos_trigger_beat = 0
+        self.dis_thanos_trigger_active = False
+        self.dis_thanos_trigger_start_beat = 0
         
         self.dis_glitch_enabled = False
         self.dis_glitch_amount = 0.0
         self.dis_glitch_mode = "LFO"
         self.dis_glitch_mod = Modulator()
+        self.dis_glitch_trigger_enabled = False
+        self.dis_glitch_trigger_beat = 0
+        self.dis_glitch_trigger_active = False
+        self.dis_glitch_trigger_start_beat = 0
         
         self.dis_scatter_enabled = False
         self.dis_scatter_amount = 0.0
         self.dis_scatter_mode = "LFO"
         self.dis_scatter_mod = Modulator()
+        self.dis_scatter_trigger_enabled = False
+        self.dis_scatter_trigger_beat = 0
+        self.dis_scatter_trigger_active = False
+        self.dis_scatter_trigger_start_beat = 0
         
         self.dis_ember_enabled = False
         self.dis_ember_amount = 0.0
         self.dis_ember_mode = "LFO"
         self.dis_ember_mod = Modulator()
+        self.dis_ember_trigger_enabled = False
+        self.dis_ember_trigger_beat = 0
+        self.dis_ember_trigger_active = False
+        self.dis_ember_trigger_start_beat = 0
         
         self.dis_rain_enabled = False
         self.dis_rain_amount = 0.0
         self.dis_rain_mode = "LFO"
         self.dis_rain_mod = Modulator()
+        self.dis_rain_trigger_enabled = False
+        self.dis_rain_trigger_beat = 0
+        self.dis_rain_trigger_active = False
+        self.dis_rain_trigger_start_beat = 0
         
         # Pre-generate noise patterns for effects (separate for each effect)
         self.dis_particle_noise = None
@@ -533,16 +557,22 @@ class VideoChannel:
              'spin_mod': self.spin_mod.to_dict(),
              'dis_particle_enabled': self.dis_particle_enabled, 'dis_particle_amount': self.dis_particle_amount,
              'dis_particle_mode': self.dis_particle_mode, 'dis_particle_mod': self.dis_particle_mod.to_dict(),
+             'dis_particle_trigger_enabled': self.dis_particle_trigger_enabled, 'dis_particle_trigger_beat': self.dis_particle_trigger_beat,
              'dis_thanos_enabled': self.dis_thanos_enabled, 'dis_thanos_amount': self.dis_thanos_amount,
              'dis_thanos_mode': self.dis_thanos_mode, 'dis_thanos_mod': self.dis_thanos_mod.to_dict(),
+             'dis_thanos_trigger_enabled': self.dis_thanos_trigger_enabled, 'dis_thanos_trigger_beat': self.dis_thanos_trigger_beat,
              'dis_glitch_enabled': self.dis_glitch_enabled, 'dis_glitch_amount': self.dis_glitch_amount,
              'dis_glitch_mode': self.dis_glitch_mode, 'dis_glitch_mod': self.dis_glitch_mod.to_dict(),
+             'dis_glitch_trigger_enabled': self.dis_glitch_trigger_enabled, 'dis_glitch_trigger_beat': self.dis_glitch_trigger_beat,
              'dis_scatter_enabled': self.dis_scatter_enabled, 'dis_scatter_amount': self.dis_scatter_amount,
              'dis_scatter_mode': self.dis_scatter_mode, 'dis_scatter_mod': self.dis_scatter_mod.to_dict(),
+             'dis_scatter_trigger_enabled': self.dis_scatter_trigger_enabled, 'dis_scatter_trigger_beat': self.dis_scatter_trigger_beat,
              'dis_ember_enabled': self.dis_ember_enabled, 'dis_ember_amount': self.dis_ember_amount,
              'dis_ember_mode': self.dis_ember_mode, 'dis_ember_mod': self.dis_ember_mod.to_dict(),
+             'dis_ember_trigger_enabled': self.dis_ember_trigger_enabled, 'dis_ember_trigger_beat': self.dis_ember_trigger_beat,
              'dis_rain_enabled': self.dis_rain_enabled, 'dis_rain_amount': self.dis_rain_amount,
-             'dis_rain_mode': self.dis_rain_mode, 'dis_rain_mod': self.dis_rain_mod.to_dict()}
+             'dis_rain_mode': self.dis_rain_mode, 'dis_rain_mod': self.dis_rain_mod.to_dict(),
+             'dis_rain_trigger_enabled': self.dis_rain_trigger_enabled, 'dis_rain_trigger_beat': self.dis_rain_trigger_beat}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -575,21 +605,33 @@ class VideoChannel:
             self.dis_particle_enabled = d.get('dis_particle_enabled', False)
             self.dis_particle_amount = d.get('dis_particle_amount', 0.0)
             self.dis_particle_mode = d.get('dis_particle_mode', 'LFO')
+            self.dis_particle_trigger_enabled = d.get('dis_particle_trigger_enabled', False)
+            self.dis_particle_trigger_beat = d.get('dis_particle_trigger_beat', 0)
             self.dis_thanos_enabled = d.get('dis_thanos_enabled', False)
             self.dis_thanos_amount = d.get('dis_thanos_amount', 0.0)
             self.dis_thanos_mode = d.get('dis_thanos_mode', 'LFO')
+            self.dis_thanos_trigger_enabled = d.get('dis_thanos_trigger_enabled', False)
+            self.dis_thanos_trigger_beat = d.get('dis_thanos_trigger_beat', 0)
             self.dis_glitch_enabled = d.get('dis_glitch_enabled', False)
             self.dis_glitch_amount = d.get('dis_glitch_amount', 0.0)
             self.dis_glitch_mode = d.get('dis_glitch_mode', 'LFO')
+            self.dis_glitch_trigger_enabled = d.get('dis_glitch_trigger_enabled', False)
+            self.dis_glitch_trigger_beat = d.get('dis_glitch_trigger_beat', 0)
             self.dis_scatter_enabled = d.get('dis_scatter_enabled', False)
             self.dis_scatter_amount = d.get('dis_scatter_amount', 0.0)
             self.dis_scatter_mode = d.get('dis_scatter_mode', 'LFO')
+            self.dis_scatter_trigger_enabled = d.get('dis_scatter_trigger_enabled', False)
+            self.dis_scatter_trigger_beat = d.get('dis_scatter_trigger_beat', 0)
             self.dis_ember_enabled = d.get('dis_ember_enabled', False)
             self.dis_ember_amount = d.get('dis_ember_amount', 0.0)
             self.dis_ember_mode = d.get('dis_ember_mode', 'LFO')
+            self.dis_ember_trigger_enabled = d.get('dis_ember_trigger_enabled', False)
+            self.dis_ember_trigger_beat = d.get('dis_ember_trigger_beat', 0)
             self.dis_rain_enabled = d.get('dis_rain_enabled', False)
             self.dis_rain_amount = d.get('dis_rain_amount', 0.0)
             self.dis_rain_mode = d.get('dis_rain_mode', 'LFO')
+            self.dis_rain_trigger_enabled = d.get('dis_rain_trigger_enabled', False)
+            self.dis_rain_trigger_beat = d.get('dis_rain_trigger_beat', 0)
             
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
@@ -729,26 +771,50 @@ class VideoChannel:
             self.dis_particle_amount = 0.0
             self.dis_particle_mode = "LFO"
             self.dis_particle_mod.reset()
+            self.dis_particle_trigger_enabled = False
+            self.dis_particle_trigger_beat = 0
+            self.dis_particle_trigger_active = False
+            self.dis_particle_trigger_start_beat = 0
             self.dis_thanos_enabled = False
             self.dis_thanos_amount = 0.0
             self.dis_thanos_mode = "LFO"
             self.dis_thanos_mod.reset()
+            self.dis_thanos_trigger_enabled = False
+            self.dis_thanos_trigger_beat = 0
+            self.dis_thanos_trigger_active = False
+            self.dis_thanos_trigger_start_beat = 0
             self.dis_glitch_enabled = False
             self.dis_glitch_amount = 0.0
             self.dis_glitch_mode = "LFO"
             self.dis_glitch_mod.reset()
+            self.dis_glitch_trigger_enabled = False
+            self.dis_glitch_trigger_beat = 0
+            self.dis_glitch_trigger_active = False
+            self.dis_glitch_trigger_start_beat = 0
             self.dis_scatter_enabled = False
             self.dis_scatter_amount = 0.0
             self.dis_scatter_mode = "LFO"
             self.dis_scatter_mod.reset()
+            self.dis_scatter_trigger_enabled = False
+            self.dis_scatter_trigger_beat = 0
+            self.dis_scatter_trigger_active = False
+            self.dis_scatter_trigger_start_beat = 0
             self.dis_ember_enabled = False
             self.dis_ember_amount = 0.0
             self.dis_ember_mode = "LFO"
             self.dis_ember_mod.reset()
+            self.dis_ember_trigger_enabled = False
+            self.dis_ember_trigger_beat = 0
+            self.dis_ember_trigger_active = False
+            self.dis_ember_trigger_start_beat = 0
             self.dis_rain_enabled = False
             self.dis_rain_amount = 0.0
             self.dis_rain_mode = "LFO"
             self.dis_rain_mod.reset()
+            self.dis_rain_trigger_enabled = False
+            self.dis_rain_trigger_beat = 0
+            self.dis_rain_trigger_active = False
+            self.dis_rain_trigger_start_beat = 0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -1338,28 +1404,124 @@ class VideoChannel:
         
         # Disintegration effects processing
         if self.dis_particle_enabled:
-            amt = self._get_dis_amount(self.dis_particle_mode, self.dis_particle_amount, self.dis_particle_mod, beat_pos)
-            frame = self._apply_particle_dissolve(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_particle_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_particle_trigger_active and loop_beat == self.dis_particle_trigger_beat:
+                    self.dis_particle_trigger_active = True
+                    self.dis_particle_trigger_start_beat = beat_pos
+                
+                if self.dis_particle_trigger_active:
+                    duration = max(0.25, self.dis_particle_amount * 4)
+                    elapsed = beat_pos - self.dis_particle_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_particle_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_particle_dissolve(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_particle_mode, self.dis_particle_amount, self.dis_particle_mod, beat_pos)
+                frame = self._apply_particle_dissolve(frame, amt, beat_pos)
         
         if self.dis_thanos_enabled:
-            amt = self._get_dis_amount(self.dis_thanos_mode, self.dis_thanos_amount, self.dis_thanos_mod, beat_pos)
-            frame = self._apply_thanos_snap(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_thanos_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_thanos_trigger_active and loop_beat == self.dis_thanos_trigger_beat:
+                    self.dis_thanos_trigger_active = True
+                    self.dis_thanos_trigger_start_beat = beat_pos
+                
+                if self.dis_thanos_trigger_active:
+                    duration = max(0.25, self.dis_thanos_amount * 4)
+                    elapsed = beat_pos - self.dis_thanos_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_thanos_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_thanos_snap(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_thanos_mode, self.dis_thanos_amount, self.dis_thanos_mod, beat_pos)
+                frame = self._apply_thanos_snap(frame, amt, beat_pos)
         
         if self.dis_glitch_enabled:
-            amt = self._get_dis_amount(self.dis_glitch_mode, self.dis_glitch_amount, self.dis_glitch_mod, beat_pos)
-            frame = self._apply_glitch_dissolve(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_glitch_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_glitch_trigger_active and loop_beat == self.dis_glitch_trigger_beat:
+                    self.dis_glitch_trigger_active = True
+                    self.dis_glitch_trigger_start_beat = beat_pos
+                
+                if self.dis_glitch_trigger_active:
+                    duration = max(0.25, self.dis_glitch_amount * 4)
+                    elapsed = beat_pos - self.dis_glitch_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_glitch_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_glitch_dissolve(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_glitch_mode, self.dis_glitch_amount, self.dis_glitch_mod, beat_pos)
+                frame = self._apply_glitch_dissolve(frame, amt, beat_pos)
         
         if self.dis_scatter_enabled:
-            amt = self._get_dis_amount(self.dis_scatter_mode, self.dis_scatter_amount, self.dis_scatter_mod, beat_pos)
-            frame = self._apply_pixel_scatter(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_scatter_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_scatter_trigger_active and loop_beat == self.dis_scatter_trigger_beat:
+                    self.dis_scatter_trigger_active = True
+                    self.dis_scatter_trigger_start_beat = beat_pos
+                
+                if self.dis_scatter_trigger_active:
+                    duration = max(0.25, self.dis_scatter_amount * 4)
+                    elapsed = beat_pos - self.dis_scatter_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_scatter_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_pixel_scatter(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_scatter_mode, self.dis_scatter_amount, self.dis_scatter_mod, beat_pos)
+                frame = self._apply_pixel_scatter(frame, amt, beat_pos)
         
         if self.dis_ember_enabled:
-            amt = self._get_dis_amount(self.dis_ember_mode, self.dis_ember_amount, self.dis_ember_mod, beat_pos)
-            frame = self._apply_ash_ember(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_ember_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_ember_trigger_active and loop_beat == self.dis_ember_trigger_beat:
+                    self.dis_ember_trigger_active = True
+                    self.dis_ember_trigger_start_beat = beat_pos
+                
+                if self.dis_ember_trigger_active:
+                    duration = max(0.25, self.dis_ember_amount * 4)
+                    elapsed = beat_pos - self.dis_ember_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_ember_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_ash_ember(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_ember_mode, self.dis_ember_amount, self.dis_ember_mod, beat_pos)
+                frame = self._apply_ash_ember(frame, amt, beat_pos)
         
         if self.dis_rain_enabled:
-            amt = self._get_dis_amount(self.dis_rain_mode, self.dis_rain_amount, self.dis_rain_mod, beat_pos)
-            frame = self._apply_digital_rain(frame, amt, beat_pos)
+            # Check trigger
+            if self.dis_rain_trigger_enabled:
+                loop_beat = int(beat_pos % 64)
+                if not self.dis_rain_trigger_active and loop_beat == self.dis_rain_trigger_beat:
+                    self.dis_rain_trigger_active = True
+                    self.dis_rain_trigger_start_beat = beat_pos
+                
+                if self.dis_rain_trigger_active:
+                    duration = max(0.25, self.dis_rain_amount * 4)
+                    elapsed = beat_pos - self.dis_rain_trigger_start_beat
+                    amt = min(1.0, elapsed / duration)
+                    if amt >= 1.0:
+                        self.dis_rain_trigger_active = False
+                        amt = 0.0
+                    frame = self._apply_digital_rain(frame, amt, beat_pos)
+            else:
+                amt = self._get_dis_amount(self.dis_rain_mode, self.dis_rain_amount, self.dis_rain_mod, beat_pos)
+                frame = self._apply_digital_rain(frame, amt, beat_pos)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
@@ -2714,6 +2876,26 @@ class VideoMixer:
             rate_combo.pack(side=tk.LEFT)
             rate_combo.bind("<<ComboboxSelected>>",
                           lambda e: setattr(mod_obj, 'rate', Modulator.RATE_OPTIONS.get(c[f'{effect_name}_rate'].get(), 1.0)))
+            
+            # Trigger controls frame
+            trigger_frame = ttk.Frame(frame)
+            trigger_frame.pack(side=tk.LEFT, padx=2)
+            
+            # Trigger enable checkbox
+            c[f'{effect_name}_trigger_en'] = tk.BooleanVar(value=False)
+            ttk.Checkbutton(trigger_frame, text="Trigger", variable=c[f'{effect_name}_trigger_en'],
+                          command=lambda: setattr(ch, f'{effect_name}_trigger_enabled', c[f'{effect_name}_trigger_en'].get())).pack(side=tk.LEFT)
+            
+            # Trigger beat label and spinbox
+            ttk.Label(trigger_frame, text="Beat:").pack(side=tk.LEFT)
+            c[f'{effect_name}_trigger_beat'] = tk.IntVar(value=0)
+            trigger_beat_spinbox = ttk.Spinbox(trigger_frame, from_=0, to=64, width=4, 
+                                               textvariable=c[f'{effect_name}_trigger_beat'],
+                                               command=lambda: setattr(ch, f'{effect_name}_trigger_beat', c[f'{effect_name}_trigger_beat'].get()))
+            trigger_beat_spinbox.pack(side=tk.LEFT)
+            # Also bind to key release for when user types directly
+            trigger_beat_spinbox.bind('<KeyRelease>', 
+                                     lambda e: setattr(ch, f'{effect_name}_trigger_beat', c[f'{effect_name}_trigger_beat'].get()))
         
         # Create controls for each disintegration effect
         setup_dis_effect(tab_dis, 'dis_particle', 'Particle:')
