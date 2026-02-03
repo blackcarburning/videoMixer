@@ -975,46 +975,33 @@ class VideoChannel:
         return result
     
     def _apply_glitch_dissolve(self, frame, amount, beat_pos):
-        """Blocks fragment with RGB separation"""
+        """Blocks fragment with RGB separation - VECTORIZED"""
         if amount <= 0:
             return frame
         h, w = frame.shape[:2]
         result = frame.copy()
         
-        block_size = max(4, int(32 * (1 - amount * 0.8)))
+        block_size = max(8, int(32 * (1 - amount * 0.8)))  # Minimum 8 for performance
         
-        # Pre-generate random values for all blocks
+        # Create block-level random mask - use ceiling division to cover full frame
         num_blocks_y = (h + block_size - 1) // block_size
         num_blocks_x = (w + block_size - 1) // block_size
-        if self.dis_glitch_blocks is None or self.dis_glitch_blocks.shape != (num_blocks_y, num_blocks_x, 3):
-            # Store: [should_glitch, offset_x, offset_y] for each block
-            self.dis_glitch_blocks = np.random.random((num_blocks_y, num_blocks_x, 3)).astype(np.float32)
         
-        block_idx_y = 0
-        for y in range(0, h, block_size):
-            block_idx_x = 0
-            for x in range(0, w, block_size):
-                # Use pre-generated random values
-                should_glitch = self.dis_glitch_blocks[block_idx_y, block_idx_x, 0]
-                if should_glitch < amount:
-                    # Offset this block using pre-generated random values
-                    ox = int((self.dis_glitch_blocks[block_idx_y, block_idx_x, 1] - 0.5) * amount * 100)
-                    oy = int((self.dis_glitch_blocks[block_idx_y, block_idx_x, 2] - 0.5) * amount * 50)
-                    
-                    y2, x2 = min(y + block_size, h), min(x + block_size, w)
-                    ny = np.clip(y + oy, 0, h - (y2 - y))
-                    nx = np.clip(x + ox, 0, w - (x2 - x))
-                    ny2, nx2 = ny + (y2 - y), nx + (x2 - x)
-                    
-                    block = frame[ny:ny2, nx:nx2].copy()
-                    # RGB separation
-                    if len(block.shape) >= 3 and block.shape[2] >= 3:
-                        block[:, :, 0] = np.roll(block[:, :, 0], int(amount * 10), axis=1)
-                        block[:, :, 2] = np.roll(block[:, :, 2], -int(amount * 10), axis=1)
-                    
-                    result[y:y2, x:x2] = block
-                block_idx_x += 1
-            block_idx_y += 1
+        if self.dis_glitch_blocks is None or self.dis_glitch_blocks.shape[:2] != (num_blocks_y, num_blocks_x):
+            self.dis_glitch_blocks = np.random.random((num_blocks_y, num_blocks_x)).astype(np.float32)
+        
+        # Simple RGB separation instead of block displacement
+        shift = int(amount * 15)
+        if shift > 0:
+            result[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1)   # Blue right
+            result[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)  # Red left
+        
+        # Block-based transparency using np.repeat (more memory-efficient than kron)
+        block_mask = np.repeat(np.repeat(self.dis_glitch_blocks < amount, block_size, axis=0), block_size, axis=1)
+        block_mask = block_mask[:h, :w]  # Trim to frame size
+        
+        # Apply transparency to glitched blocks
+        result[block_mask] = result[block_mask] * (1 - amount * 0.3)
         
         return result
     
@@ -1094,7 +1081,7 @@ class VideoChannel:
         return result
     
     def _apply_digital_rain(self, frame, amount, beat_pos):
-        """Pixels fall like Matrix rain"""
+        """Pixels fall like Matrix rain - VECTORIZED"""
         if amount <= 0:
             return frame
         h, w = frame.shape[:2]
@@ -1103,14 +1090,26 @@ class VideoChannel:
         if self.dis_rain_offsets is None or len(self.dis_rain_offsets) != w:
             self.dis_rain_offsets = np.random.random(w).astype(np.float32)
         
-        result = frame.copy()
+        # Calculate all offsets at once
+        offsets = (self.dis_rain_offsets * h * amount).astype(np.int32)
+        max_offset = offsets.max()
         
-        for x in range(w):
-            # Each column falls at different speed - simplified calculation
-            offset = int(self.dis_rain_offsets[x] * h * amount)
-            if offset > 0:
-                result[:, x] = np.roll(frame[:, x], offset, axis=0)
-                result[:offset, x] = 0  # Top becomes black
+        if max_offset <= 0:
+            return frame
+        
+        # Create row indices for each column
+        row_indices = np.arange(h).reshape(-1, 1)
+        col_indices = np.arange(w).reshape(1, -1)
+        
+        # Calculate source rows (where to pull pixels from)
+        source_rows = (row_indices - offsets) % h
+        
+        # Apply the shift - advanced indexing creates a new array (no need for prior copy)
+        result = frame[source_rows, col_indices]
+        
+        # Black out the top portion based on offset - fully vectorized
+        mask = row_indices < offsets
+        result[mask] = 0
         
         return result
 
@@ -1275,7 +1274,11 @@ class VideoChannel:
                 frame = cv2.warpAffine(frame, M, (w, h))
 
         if self.blur_mod.enabled and self.blur_mod.depth > 0:
-            bval = (self.blur_mod.get_value(beat_pos) + 1.0) / 2.0 
+            # LFO value is -1 to 1, map to 0 to 1 for blur amount
+            lfo_val = (self.blur_mod.get_value(beat_pos) + 1.0) / 2.0  # 0 to 1
+            # Multiply by depth - at LFO min (0), blur is always 0 (sharp)
+            # At LFO max (1), blur equals depth setting
+            bval = lfo_val * self.blur_mod.depth
             if bval > 0.05:
                 k = int(bval * 30) * 2 + 1 
                 frame = cv2.GaussianBlur(frame, (k, k), 0)
