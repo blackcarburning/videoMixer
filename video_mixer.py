@@ -833,7 +833,7 @@ class VideoChannel:
         dissolved[:offset, :] = 0
         
         result[~mask] = dissolved[~mask]
-        result[~mask] = (result[~mask] * (1 - amount * 0.5)).astype(np.uint8) if result.dtype == np.uint8 else result[~mask] * (1 - amount * 0.5)
+        result[~mask] = result[~mask] * (1 - amount * 0.5)
         
         return result
     
@@ -927,8 +927,9 @@ class VideoChannel:
             return frame
         h, w = frame.shape[:2]
         
-        # Edge detection
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        # Edge detection - need uint8 for Canny
+        frame_uint8 = (frame * 255.0).astype(np.uint8)
+        gray = cv2.cvtColor(frame_uint8, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame_uint8
         edges = cv2.Canny(gray, 50, 150)
         
         # Dilate edges based on amount
@@ -938,10 +939,10 @@ class VideoChannel:
         
         result = frame.copy()
         
-        # Create ember glow (orange/red)
+        # Create ember glow (orange/red) - use float32 0-1 range
         ember = np.zeros_like(frame)
-        ember[:, :, 2] = 255  # Red
-        ember[:, :, 1] = 100  # Some green for orange tint
+        ember[:, :, 2] = 1.0  # Red
+        ember[:, :, 1] = 0.4  # Some green for orange tint
         
         # Apply dissolution at edges
         edge_mask_3d = edge_mask[:, :, np.newaxis] / 255.0
