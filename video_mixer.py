@@ -453,8 +453,12 @@ class VideoChannel:
         self.dis_rain_mode = "LFO"
         self.dis_rain_mod = Modulator()
         
-        # Pre-generate noise patterns for effects
-        self.dis_noise_pattern = None
+        # Pre-generate noise patterns for effects (separate for each effect)
+        self.dis_particle_noise = None
+        self.dis_thanos_noise = None
+        self.dis_glitch_blocks = None
+        self.dis_scatter_random = None
+        self.dis_ember_noise = None
         self.dis_rain_offsets = None
         
         self.loop = True
@@ -821,18 +825,18 @@ class VideoChannel:
         result = frame.copy()
         
         # Create threshold mask based on amount
-        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
-            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        if self.dis_particle_noise is None or self.dis_particle_noise.shape[:2] != (h, w):
+            self.dis_particle_noise = np.random.random((h, w)).astype(np.float32)
         
         # Pixels below threshold dissolve
-        mask = self.dis_noise_pattern > amount
+        mask = self.dis_particle_noise > amount
         
         # Add falling offset to dissolved pixels
         offset = int(amount * h * 0.3)
-        dissolved = np.roll(frame, offset, axis=0)
-        dissolved[:offset, :] = 0
+        fallen_frame = np.roll(frame, offset, axis=0)
+        fallen_frame[:offset, :] = 0
         
-        result[~mask] = dissolved[~mask]
+        result[~mask] = fallen_frame[~mask]
         result[~mask] = result[~mask] * (1 - amount * 0.5)
         
         return result
@@ -844,11 +848,11 @@ class VideoChannel:
         h, w = frame.shape[:2]
         result = frame.copy()
         
-        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
-            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        if self.dis_thanos_noise is None or self.dis_thanos_noise.shape[:2] != (h, w):
+            self.dis_thanos_noise = np.random.random((h, w)).astype(np.float32)
         
         # Threshold determines which pixels are "snapped"
-        mask = self.dis_noise_pattern > amount
+        mask = self.dis_thanos_noise > amount
         
         # Dissolved pixels get scattered horizontally
         scatter_x = int(amount * 50)
@@ -867,23 +871,38 @@ class VideoChannel:
         
         block_size = max(4, int(32 * (1 - amount * 0.8)))
         
+        # Pre-generate random values for all blocks
+        num_blocks_y = (h + block_size - 1) // block_size
+        num_blocks_x = (w + block_size - 1) // block_size
+        if self.dis_glitch_blocks is None or self.dis_glitch_blocks.shape != (num_blocks_y, num_blocks_x, 3):
+            # Store: [should_glitch, offset_x, offset_y] for each block
+            self.dis_glitch_blocks = np.random.random((num_blocks_y, num_blocks_x, 3)).astype(np.float32)
+        
+        block_idx_y = 0
         for y in range(0, h, block_size):
+            block_idx_x = 0
             for x in range(0, w, block_size):
-                if np.random.random() < amount:
-                    # Offset this block
-                    ox = int((np.random.random() - 0.5) * amount * 100)
-                    oy = int((np.random.random() - 0.5) * amount * 50)
+                # Use pre-generated random values
+                should_glitch = self.dis_glitch_blocks[block_idx_y, block_idx_x, 0]
+                if should_glitch < amount:
+                    # Offset this block using pre-generated random values
+                    ox = int((self.dis_glitch_blocks[block_idx_y, block_idx_x, 1] - 0.5) * amount * 100)
+                    oy = int((self.dis_glitch_blocks[block_idx_y, block_idx_x, 2] - 0.5) * amount * 50)
                     
                     y2, x2 = min(y + block_size, h), min(x + block_size, w)
-                    ny, nx = max(0, min(y + oy, h - block_size)), max(0, min(x + ox, w - block_size))
+                    ny = np.clip(y + oy, 0, h - (y2 - y))
+                    nx = np.clip(x + ox, 0, w - (x2 - x))
+                    ny2, nx2 = ny + (y2 - y), nx + (x2 - x)
                     
-                    block = frame[y:y2, x:x2].copy()
+                    block = frame[ny:ny2, nx:nx2].copy()
                     # RGB separation
                     if len(block.shape) >= 3 and block.shape[2] >= 3:
                         block[:, :, 0] = np.roll(block[:, :, 0], int(amount * 10), axis=1)
                         block[:, :, 2] = np.roll(block[:, :, 2], -int(amount * 10), axis=1)
                     
                     result[y:y2, x:x2] = block
+                block_idx_x += 1
+            block_idx_y += 1
         
         return result
     
@@ -892,9 +911,12 @@ class VideoChannel:
         if amount <= 0:
             return frame
         h, w = frame.shape[:2]
-        result = np.zeros_like(frame)
         
         cy, cx = h // 2, w // 2
+        
+        # Pre-generate random scatter pattern once
+        if self.dis_scatter_random is None or self.dis_scatter_random.shape[:2] != (h, w):
+            self.dis_scatter_random = np.random.random((h, w)).astype(np.float32)
         
         # Create coordinate grids
         y_coords, x_coords = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
@@ -907,8 +929,8 @@ class VideoChannel:
         dist = np.sqrt(dx**2 + dy**2) + 1
         scatter_amount = amount * 100
         
-        new_y = (y_coords - (dy / dist * scatter_amount * np.random.random((h, w)))).astype(np.int32)
-        new_x = (x_coords - (dx / dist * scatter_amount * np.random.random((h, w)))).astype(np.int32)
+        new_y = (y_coords - (dy / dist * scatter_amount * self.dis_scatter_random)).astype(np.int32)
+        new_x = (x_coords - (dx / dist * scatter_amount * self.dis_scatter_random)).astype(np.int32)
         
         # Clamp coordinates
         new_y = np.clip(new_y, 0, h - 1)
@@ -951,10 +973,10 @@ class VideoChannel:
         result = (result * (1 - edge_mask_3d * amount) + ember * edge_mask_3d * amount).astype(frame.dtype)
         
         # Random pixel removal at edges
-        if self.dis_noise_pattern is None or self.dis_noise_pattern.shape[:2] != (h, w):
-            self.dis_noise_pattern = np.random.random((h, w)).astype(np.float32)
+        if self.dis_ember_noise is None or self.dis_ember_noise.shape[:2] != (h, w):
+            self.dis_ember_noise = np.random.random((h, w)).astype(np.float32)
         
-        dissolve_mask = (edge_mask > 0) & (self.dis_noise_pattern < amount)
+        dissolve_mask = (edge_mask > 0) & (self.dis_ember_noise < amount)
         result[dissolve_mask] = 0
         
         return result
@@ -972,8 +994,8 @@ class VideoChannel:
         result = frame.copy()
         
         for x in range(w):
-            # Each column falls at different speed
-            offset = int((self.dis_rain_offsets[x] + amount) * h * amount)
+            # Each column falls at different speed - simplified calculation
+            offset = int(self.dis_rain_offsets[x] * h * amount)
             if offset > 0:
                 result[:, x] = np.roll(frame[:, x], offset, axis=0)
                 result[:offset, x] = 0  # Top becomes black
