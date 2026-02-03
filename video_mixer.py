@@ -1110,10 +1110,9 @@ class VideoChannel:
         # Apply the shift
         result = frame[source_rows, col_indices]
         
-        # Black out the top portion based on offset
-        for x in range(w):
-            if offsets[x] > 0:
-                result[:offsets[x], x] = 0
+        # Black out the top portion based on offset - fully vectorized
+        mask = row_indices < offsets
+        result[mask] = 0
         
         return result
 
