@@ -996,8 +996,8 @@ class VideoChannel:
             result[:, :, 0] = np.roll(frame[:, :, 0], shift, axis=1)   # Blue right
             result[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)  # Red left
         
-        # Block-based transparency using vectorized operation
-        block_mask = np.repeat(np.repeat(self.dis_glitch_blocks < amount, block_size, axis=0), block_size, axis=1)
+        # Block-based transparency using Kronecker product for efficient upscaling
+        block_mask = np.kron(self.dis_glitch_blocks < amount, np.ones((block_size, block_size), dtype=bool))
         block_mask = block_mask[:h, :w]  # Trim to frame size
         
         # Apply transparency to glitched blocks
@@ -1097,9 +1097,6 @@ class VideoChannel:
         if max_offset <= 0:
             return frame
         
-        # Vectorized column shifting using advanced indexing
-        result = frame.copy()
-        
         # Create row indices for each column
         row_indices = np.arange(h).reshape(-1, 1)
         col_indices = np.arange(w).reshape(1, -1)
@@ -1107,7 +1104,7 @@ class VideoChannel:
         # Calculate source rows (where to pull pixels from)
         source_rows = (row_indices - offsets) % h
         
-        # Apply the shift
+        # Apply the shift - advanced indexing creates a new array (no need for prior copy)
         result = frame[source_rows, col_indices]
         
         # Black out the top portion based on offset - fully vectorized
