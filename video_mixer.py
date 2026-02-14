@@ -2185,6 +2185,12 @@ class VideoMixer:
                    "exclusion", "hard_light", "soft_light", "color_dodge", "color_burn",
                    "darken", "lighten", "linear_light", "pin_light", "vivid_light"]
     
+    PREVIEW_SIZES = {
+        "Small": 240,
+        "Medium": 360,
+        "Large": 480
+    }
+    
     def __init__(self, root):
         self.root = root
         self.root.title("BPM Video Mixer v15 Fixed")
@@ -2193,7 +2199,12 @@ class VideoMixer:
             import ctypes
             ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x80)
         except: pass
-        self.preview_width = 640
+        
+        # Preview size settings
+        self.preview_max_height = 360  # Default medium size
+        
+        # Initialize with default aspect ratio (16:9) and medium size
+        self.preview_width = int(360 * 16 / 9)  # 640
         self.preview_height = 360
         self.channel_a = VideoChannel(self.preview_width, self.preview_height)
         self.channel_b = VideoChannel(self.preview_width, self.preview_height)
@@ -2423,6 +2434,15 @@ class VideoMixer:
         aspect_combo = ttk.Combobox(row2, textvariable=self.aspect_var, values=["16:9", "4:3", "1:1", "3:4", "9:16"], state="readonly", width=6)
         aspect_combo.pack(side=tk.LEFT, padx=3)
         aspect_combo.bind("<<ComboboxSelected>>", lambda e: self.on_aspect_ratio_change())
+        
+        ttk.Label(row2, text="Size:").pack(side=tk.LEFT, padx=(10, 2))
+        self.preview_size_var = tk.StringVar(value="Medium")
+        size_combo = ttk.Combobox(row2, textvariable=self.preview_size_var,
+                                  values=["Small", "Medium", "Large"],
+                                  state="readonly", width=7)
+        size_combo.pack(side=tk.LEFT, padx=2)
+        size_combo.bind("<<ComboboxSelected>>", lambda e: self.on_preview_size_change())
+        
         ttk.Label(row2, text=" | ").pack(side=tk.LEFT)
         self.metro_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2, text="Metro", variable=self.metro_var, command=lambda: setattr(self.metronome, 'enabled', self.metro_var.get())).pack(side=tk.LEFT)
@@ -2574,16 +2594,17 @@ class VideoMixer:
         
         w_ratio, h_ratio = aspect_ratios[aspect]
         
-        # Keep width at 640 and adjust height to maintain aspect ratio
-        base_width = 640
-        new_height = int(base_width * h_ratio / w_ratio)
+        # Fixed height approach - height stays constant
+        max_height = self.preview_max_height
+        new_height = max_height
+        new_width = int(max_height * w_ratio / h_ratio)
         
         # Only update if dimensions actually changed
-        if self.preview_width == base_width and self.preview_height == new_height:
+        if self.preview_width == new_width and self.preview_height == new_height:
             return
         
         # Update preview dimensions
-        self.preview_width = base_width
+        self.preview_width = new_width
         self.preview_height = new_height
         
         # Update canvas size
@@ -2598,6 +2619,13 @@ class VideoMixer:
         self.output_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
         
         self.status.set(f"Aspect ratio changed to {aspect}")
+    
+    def on_preview_size_change(self):
+        """Handle preview size change from the dropdown."""
+        size = self.preview_size_var.get()
+        self.preview_max_height = self.PREVIEW_SIZES.get(size, self.PREVIEW_SIZES["Medium"])
+        # Re-apply aspect ratio with new size
+        self.on_aspect_ratio_change()
     
     def load_audio(self):
         p = filedialog.askopenfilename(filetypes=[("Audio", "*.wav *.mp3 *.ogg")])
