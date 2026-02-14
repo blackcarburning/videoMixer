@@ -941,11 +941,6 @@ class VideoChannel:
                         trigger_enabled=False, trigger_beat=0.0, trigger_duration=1.0, mixer=None):
         """Get disintegration amount based on mode"""
         
-        # Get parameters from mixer if available (for LFO mode)
-        bpm = getattr(mixer, 'bpm', 120.0)
-        env_attack = getattr(mixer, 'env_attack', 0.1)
-        env_release = getattr(mixer, 'env_release', 0.5)
-        
         # Trigger mode - only works when global loop is enabled
         if trigger_enabled and mixer is not None and mixer.global_loop_enabled:
             # Calculate beat position within the global loop
@@ -3560,8 +3555,7 @@ class VideoMixer:
                     
                     # Cache the last rendered frame in BGR format for FrameRecorder
                     # blended is already in BGR from OpenCV processing
-                    # Convert from float32 (0.0-1.0) to uint8 (0-255) for cv2.VideoWriter
-                    self.last_rendered_frame = (np.clip(blended, 0, 1) * 255).astype(np.uint8)
+                    self.last_rendered_frame = blended.copy()
         except Exception as e:
             print(f"ERROR in update_loop: {e}")
             traceback.print_exc()
