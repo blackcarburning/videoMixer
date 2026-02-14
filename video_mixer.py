@@ -2015,6 +2015,7 @@ class FrameRecorder(threading.Thread):
         self.running = False
         self.writer = None
         self.frame_count = 0
+        self.dropped_frames = 0  # Track dropped frames
         # Track actual recording metrics
         self.recording_start_time = None
         self.recording_end_time = None
@@ -2063,6 +2064,11 @@ class FrameRecorder(threading.Thread):
                 # If we've fallen behind, reset to current time + interval
                 # This prevents accumulating delay but means we'll drop frames if system can't keep up
                 if next_frame_time < now:
+                    # Calculate approximately how many frames were dropped
+                    frames_behind = int((now - next_frame_time) / self.frame_interval)
+                    if frames_behind > 0:
+                        self.dropped_frames += frames_behind
+                        print(f"Warning: Dropped approximately {frames_behind} frame(s) due to timing lag")
                     next_frame_time = now + self.frame_interval
             else:
                 # Sleep until next frame time (with small buffer)
@@ -2083,6 +2089,8 @@ class FrameRecorder(threading.Thread):
         print(f"Effective FPS: {actual_fps:.2f}")
         print(f"Expected frames: {expected_frames}")
         print(f"Frame difference: {self.recorded_frame_count - expected_frames}")
+        if self.dropped_frames > 0:
+            print(f"WARNING: Dropped {self.dropped_frames} frame(s) during recording")
     
     def stop(self):
         """Signal the thread to stop."""
@@ -3355,7 +3363,7 @@ class VideoMixer:
         This method returns the last rendered frame in BGR format (ready for cv2.VideoWriter).
         Returns None if no frame is available.
         """
-        if not hasattr(self, 'last_rendered_frame') or self.last_rendered_frame is None:
+        if self.last_rendered_frame is None:
             return None
         
         return self.last_rendered_frame
