@@ -1154,8 +1154,8 @@ class VideoChannel:
             return None
         
         # Get envelope parameters from mixer if available
-        env_attack = mixer.env_attack if mixer else 0.1
-        env_release = mixer.env_release if mixer else 0.5
+        env_attack = getattr(mixer, 'env_attack', 0.1) if mixer else 0.1
+        env_release = getattr(mixer, 'env_release', 0.5) if mixer else 0.5
             
         with self.lock:
             target_idx = -1
