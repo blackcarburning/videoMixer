@@ -2313,7 +2313,8 @@ class VideoMixer:
         'green': '#4caf50',
         'green_light': '#66bb6a',
         'orange': '#ff9800',
-        'red': '#d32f2f'
+        'red': '#d32f2f',
+        'red_light': '#ff5252'
     }
     
     def __init__(self, root):
@@ -2670,11 +2671,19 @@ class VideoMixer:
                  foreground=[('selected', c['accent']), ('active', c['fg_bright'])],
                  expand=[('selected', [1, 1, 1, 0])])
     
-    def _create_styled_button(self, parent, text, command, width, accent_color=None):
-        """Helper method to create consistently styled tk.Button widgets."""
+    def _create_styled_button(self, parent, text, command, width, bg_color=None):
+        """Helper method to create consistently styled tk.Button widgets.
+        
+        Args:
+            parent: Parent widget
+            text: Button text
+            command: Button command callback
+            width: Button width
+            bg_color: Optional custom background color (defaults to theme bg_light)
+        """
         c = self.THEME_COLORS
-        bg = accent_color if accent_color else c['bg_light']
-        active_bg = c['accent'] if not accent_color else accent_color
+        bg = bg_color if bg_color else c['bg_light']
+        active_bg = c['accent'] if not bg_color else bg_color
         
         return tk.Button(parent, text=text, command=command, 
                         font=("Arial", 11, "bold"), width=width,
@@ -2779,7 +2788,7 @@ class VideoMixer:
         # Recording button and indicator
         c = self.THEME_COLORS
         self.record_btn = tk.Button(row3, text="● Record", command=self.toggle_recording, font=("Arial", 11, "bold"), width=10,
-                                   bg=c['bg_medium'], fg=c['fg_normal'], activebackground='#ff5252', activeforeground=c['fg_bright'],
+                                   bg=c['bg_medium'], fg=c['fg_normal'], activebackground=c['red_light'], activeforeground=c['fg_bright'],
                                    relief='raised', borderwidth=1, highlightthickness=0)
         self.record_btn.pack(side=tk.LEFT, padx=2)
         self.recording_indicator = tk.Canvas(row3, width=20, height=20, bg=c['bg_medium'], highlightthickness=1, highlightbackground=c['border_light'])
