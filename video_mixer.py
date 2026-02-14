@@ -9,6 +9,7 @@ import threading
 import time
 import os
 import json
+from datetime import datetime
 try:
     import winsound
 except ImportError:
@@ -2019,7 +2020,8 @@ class RecordingThread(threading.Thread):
             import ctypes
             k = ctypes.windll.kernel32
             k.SetThreadPriority(k.GetCurrentThread(), 15)  # THREAD_PRIORITY_TIME_CRITICAL
-        except: 
+        except (AttributeError, ImportError, OSError):
+            # Windows-specific priority setting not available on this platform
             pass
         
         try:
@@ -3475,7 +3477,6 @@ class VideoMixer:
         
         try:
             # Create timestamped filename
-            from datetime import datetime
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             filename = f"videomixer_recording_{timestamp}.avi"
             
@@ -3486,7 +3487,9 @@ class VideoMixer:
             
             output_path = os.path.join(downloads_folder, filename)
             
-            # Use MJPG codec for AVI (good balance of speed/quality)
+            # Use MJPG codec for AVI format
+            # MJPG provides good balance of speed/quality for real-time recording
+            # and has wide compatibility without requiring external codecs
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
             size = (self.preview_width, self.preview_height)
             
