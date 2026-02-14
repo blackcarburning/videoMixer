@@ -245,7 +245,8 @@ class Modulator:
         self.rev_only = False
         self.fine_tune = 0.0
         
-    def get_value(self, beat_position):
+    def get_value(self, beat_position, bpm=120.0, env_attack=0.1, env_release=0.5):
+        # Note: env_attack and env_release defaults should match VideoMixer.__init__ values
         if not self.enabled or self.depth == 0:
             return 0.0
         cp = ((beat_position / self.rate) + self.phase) % 1.0
@@ -261,8 +262,41 @@ class Modulator:
         elif self.wave_type == "saw_backward":
             value = 1.0 - 2.0 * cp
         elif self.wave_type == "envelope":
-            value = pow(1.0 - cp, 4) * 2.0 - 1.0 
-            if value < -1.0: value = -1.0
+            # Calculate envelope using attack and release times
+            # Convert time in seconds to fraction of cycle
+            beat_duration = 60.0 / bpm  # seconds per beat
+            cycle_duration = self.rate * beat_duration  # seconds per cycle
+            
+            # Calculate attack and release as fractions of the cycle
+            if cycle_duration > 0:
+                attack_fraction = min(env_attack / cycle_duration, 1.0)
+                release_fraction = min(env_release / cycle_duration, 1.0)
+            else:
+                attack_fraction = 0.0
+                release_fraction = 0.0
+            
+            # Ensure attack + release doesn't exceed 1.0
+            total = attack_fraction + release_fraction
+            if total > 1.0:
+                attack_fraction = attack_fraction / total
+                release_fraction = release_fraction / total
+            
+            if cp < attack_fraction:
+                # Attack phase: ramp up from -1 to 1
+                if attack_fraction > 0:
+                    value = (cp / attack_fraction) * 2.0 - 1.0
+                else:
+                    value = 1.0
+            elif cp < (attack_fraction + release_fraction):
+                # Release phase: ramp down from 1 to -1
+                if release_fraction > 0:
+                    release_progress = (cp - attack_fraction) / release_fraction
+                    value = 1.0 - (release_progress * 2.0)
+                else:
+                    value = -1.0
+            else:
+                # Silent phase
+                value = -1.0
         if self.invert: value = -value
         if self.pos_only: value = max(0, value)
         elif self.neg_only: value = min(0, value)
@@ -858,7 +892,7 @@ class VideoChannel:
             return frame
         
         # Get modulator value (-depth to +depth) and map to 0.2-0.8 range
-        mod_value = self.mirror_center_mod.get_value(beat_pos) if self.mirror_center_mod.enabled else 0.0
+        mod_value = self.mirror_center_mod.get_value(beat_pos, bpm, env_attack, env_release) if self.mirror_center_mod.enabled else 0.0
         # Map from [-depth, +depth] to [0.2, 0.8]
         center_offset = 0.5 + mod_value * 0.3  # Maps to 0.2-0.8 range with depth=0.3
         # Clamp to 0.2 - 0.8 range
@@ -927,7 +961,7 @@ class VideoChannel:
         else:
             # LFO mode
             if modulator.enabled:
-                return max(0, min(1, base_amount + modulator.get_value(beat_pos)))
+                return max(0, min(1, base_amount + modulator.get_value(beat_pos, bpm, env_attack, env_release)))
             return base_amount
     
     def _apply_particle_dissolve(self, frame, amount, beat_pos):
@@ -1112,6 +1146,10 @@ class VideoChannel:
     def get_frame(self, beat_pos, delta_time, bpm, bpb, mixer=None):
         if not self.cap or self.frame_count == 0:
             return None
+        
+        # Get envelope parameters from mixer if available
+        env_attack = mixer.env_attack if mixer else 0.1
+        env_release = mixer.env_release if mixer else 0.5
             
         with self.lock:
             target_idx = -1
@@ -1185,14 +1223,14 @@ class VideoChannel:
                     base_start = self.loop_start_frame
                     mod_offset = 0
                     if self.loop_start_mod.enabled:
-                        mod_offset = int(self.loop_start_mod.get_value(beat_pos) * self.frame_count)
+                        mod_offset = int(self.loop_start_mod.get_value(beat_pos, bpm, env_attack, env_release) * self.frame_count)
                     fine_tune_offset = int((self.loop_start_mod.fine_tune / 100.0) * 0.01 * self.frame_count)
                     target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
                 
                 else:
                     # Standard playback mode: use playback_position state
                     # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
-                    speed_mod_value = self.speed_mod.get_value(beat_pos) if self.speed_mod.enabled else 0.0
+                    speed_mod_value = self.speed_mod.get_value(beat_pos, bpm, env_attack, env_release) if self.speed_mod.enabled else 0.0
                     effective_speed = self.speed * (1.0 + speed_mod_value * 8.0)
                     
                     # Calculate frame advancement with sequencer speed multiplier
@@ -1244,7 +1282,7 @@ class VideoChannel:
                     frame[:, :, ch] = np.roll(frame[:, :, ch], shift_amt, axis=axis)
             
             if self.rgb_mod.enabled and self.rgb_mod.depth > 0:
-                val = self.rgb_mod.get_value(beat_pos) * 100.0 
+                val = self.rgb_mod.get_value(beat_pos, bpm, env_attack, env_release) * 100.0 
                 if abs(val) > 1:
                     frame = frame.copy()  # ALWAYS copy, don't condition on glitch_rate
                     shift = int(val)
@@ -1252,7 +1290,7 @@ class VideoChannel:
                     frame[:, :, 2] = np.roll(frame[:, :, 2], -shift, axis=1)
 
         if self.pixel_mod.enabled and self.pixel_mod.depth > 0:
-            pval = (self.pixel_mod.get_value(beat_pos) + 1.0) / 2.0 * 0.95 
+            pval = (self.pixel_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0 * 0.95 
             if pval > 0.05:
                 frame = frame.copy()
                 h, w = frame.shape[:2]
@@ -1261,7 +1299,7 @@ class VideoChannel:
                 frame = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
 
         if self.zoom_mod.enabled and self.zoom_mod.depth > 0:
-            zval = (self.zoom_mod.get_value(beat_pos)) * 0.5 
+            zval = (self.zoom_mod.get_value(beat_pos, bpm, env_attack, env_release)) * 0.5 
             scale = 1.0 + max(0.0, zval) 
             if scale > 1.01:
                 frame = frame.copy()
@@ -1270,17 +1308,17 @@ class VideoChannel:
                 frame = cv2.warpAffine(frame, M, (w, h))
 
         if self.blur_mod.enabled and self.blur_mod.depth > 0:
-            # LFO value is -1 to 1, map to 0 to 1 for blur amount
-            lfo_val = (self.blur_mod.get_value(beat_pos) + 1.0) / 2.0  # 0 to 1
-            # Multiply by depth - at LFO min (0), blur is always 0 (sharp)
-            # At LFO max (1), blur equals depth setting
-            bval = lfo_val * self.blur_mod.depth
+            # get_value returns -depth to +depth, map to 0 to depth
+            # At LFO bottom (-depth), blur = 0 (sharp)
+            # At LFO top (+depth), blur = depth (maximum blur)
+            lfo_output = self.blur_mod.get_value(beat_pos, bpm, env_attack, env_release)
+            bval = (lfo_output + self.blur_mod.depth) / 2.0  # Maps 0 to depth
             if bval > 0.05:
                 k = int(bval * 30) * 2 + 1 
                 frame = cv2.GaussianBlur(frame, (k, k), 0)
 
         if self.chroma_mod.enabled and self.chroma_mod.depth > 0:
-            cval = self.chroma_mod.get_value(beat_pos) * 20.0  # Max offset of 20 pixels
+            cval = self.chroma_mod.get_value(beat_pos, bpm, env_attack, env_release) * 20.0  # Max offset of 20 pixels
             if abs(cval) > 0.5:
                 frame = frame.copy()
                 h, w = frame.shape[:2]
@@ -1300,7 +1338,7 @@ class VideoChannel:
         # Apply mosh modulator to mosh_amount
         effective_mosh = self.mosh_amount
         if self.mosh_mod.enabled:
-            mod_val = (self.mosh_mod.get_value(beat_pos) + 1.0) / 2.0  # Map -1..1 to 0..1
+            mod_val = (self.mosh_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0  # Map -1..1 to 0..1
             effective_mosh = self.mosh_amount * mod_val
 
         if effective_mosh > 0.01:
@@ -1315,7 +1353,7 @@ class VideoChannel:
         # Echo effect - creates motion trails by layering previous frames
         effective_echo = self.echo_amount
         if self.echo_mod.enabled:
-            mod_val = (self.echo_mod.get_value(beat_pos) + 1.0) / 2.0
+            mod_val = (self.echo_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0
             effective_echo = self.echo_amount * mod_val
 
         if effective_echo > 0.01:
@@ -1335,7 +1373,7 @@ class VideoChannel:
         # Slicer effect - creates scanline displacement glitches
         effective_slicer = self.slicer_amount
         if self.slicer_mod.enabled:
-            mod_val = (self.slicer_mod.get_value(beat_pos) + 1.0) / 2.0
+            mod_val = (self.slicer_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0
             effective_slicer = self.slicer_amount * mod_val
 
         if effective_slicer > 0.01:
@@ -1358,7 +1396,7 @@ class VideoChannel:
         # Kaleidoscope effect - creates symmetrical mirror patterns
         effective_kaleidoscope = self.kaleidoscope_amount
         if self.kaleidoscope_mod.enabled:
-            mod_val = (self.kaleidoscope_mod.get_value(beat_pos) + 1.0) / 2.0
+            mod_val = (self.kaleidoscope_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0
             effective_kaleidoscope = self.kaleidoscope_amount * mod_val
 
         if effective_kaleidoscope > 0.01:
@@ -1377,7 +1415,7 @@ class VideoChannel:
         # Vignette effect - darkens edges
         effective_vignette = self.vignette_amount
         if self.vignette_mod.enabled:
-            mod_val = (self.vignette_mod.get_value(beat_pos) + 1.0) / 2.0
+            mod_val = (self.vignette_mod.get_value(beat_pos, bpm, env_attack, env_release) + 1.0) / 2.0
             effective_vignette = self.vignette_amount * mod_val
 
         if effective_vignette > 0.01:
@@ -1414,7 +1452,7 @@ class VideoChannel:
         # Color Shift effect - HSV hue rotation
         effective_color_shift = self.color_shift_amount
         if self.color_shift_mod.enabled:
-            mod_val = self.color_shift_mod.get_value(beat_pos)
+            mod_val = self.color_shift_mod.get_value(beat_pos, bpm, env_attack, env_release)
             effective_color_shift = mod_val
 
         if abs(effective_color_shift) > 0.01:
@@ -1436,7 +1474,7 @@ class VideoChannel:
         # Spin effect - rotation from center
         effective_spin = self.spin_amount
         if self.spin_mod.enabled:
-            mod_val = self.spin_mod.get_value(beat_pos)
+            mod_val = self.spin_mod.get_value(beat_pos, bpm, env_attack, env_release)
             effective_spin = self.spin_amount * mod_val
 
         if abs(effective_spin) > 0.01:
@@ -1496,10 +1534,10 @@ class VideoChannel:
             )
             frame = self._apply_digital_rain(frame, amt, beat_pos)
 
-        b = self.brightness + self.brightness_mod.get_value(beat_pos) * 0.5
-        c = self.contrast + self.contrast_mod.get_value(beat_pos) * 0.5
-        s = self.saturation + self.saturation_mod.get_value(beat_pos) * 0.5
-        o = self.opacity + self.opacity_mod.get_value(beat_pos) * 0.5
+        b = self.brightness + self.brightness_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
+        c = self.contrast + self.contrast_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
+        s = self.saturation + self.saturation_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
+        o = self.opacity + self.opacity_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
         
         # Gate sequencer with timebase support
         if self.gate_enabled:
@@ -2278,6 +2316,10 @@ class VideoMixer:
         self.beat_position = 0
         self.last_update_time = time.perf_counter()
         self.metronome = HighPrecisionMetronome()
+        
+        # Envelope LFO Attack/Release settings (in seconds)
+        self.env_attack = 0.1
+        self.env_release = 0.5
         self.sync_ready = False
         self.processor = VideoProcessor(self)
         self.blend_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.float32)
@@ -2568,6 +2610,26 @@ class VideoMixer:
         ttk.Label(row5, text="Contr:").pack(side=tk.LEFT, padx=(5, 2))
         self.mcontr = tk.DoubleVar(value=1.0)
         ttk.Scale(row5, from_=0, to=2, variable=self.mcontr, length=60).pack(side=tk.LEFT)
+        
+        # Envelope LFO Attack/Release controls
+        ttk.Label(row5, text=" | Env LFO -").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(row5, text="Att:").pack(side=tk.LEFT, padx=(0, 2))
+        self.env_attack_var = tk.DoubleVar(value=0.1)
+        self.env_attack_spinbox = ttk.Spinbox(row5, from_=0.01, to=5.0, increment=0.01,
+                                              textvariable=self.env_attack_var, width=5,
+                                              command=lambda: setattr(self, 'env_attack', self.env_attack_var.get()))
+        self.env_attack_spinbox.pack(side=tk.LEFT, padx=2)
+        self.env_attack_spinbox.bind('<KeyRelease>', lambda e: setattr(self, 'env_attack', self.env_attack_var.get()))
+        ttk.Label(row5, text="s").pack(side=tk.LEFT)
+        
+        ttk.Label(row5, text="Rel:").pack(side=tk.LEFT, padx=(5, 2))
+        self.env_release_var = tk.DoubleVar(value=0.5)
+        self.env_release_spinbox = ttk.Spinbox(row5, from_=0.01, to=5.0, increment=0.01,
+                                               textvariable=self.env_release_var, width=5,
+                                               command=lambda: setattr(self, 'env_release', self.env_release_var.get()))
+        self.env_release_spinbox.pack(side=tk.LEFT, padx=2)
+        self.env_release_spinbox.bind('<KeyRelease>', lambda e: setattr(self, 'env_release', self.env_release_var.get()))
+        ttk.Label(row5, text="s").pack(side=tk.LEFT)
         
         # Row 6
         row6 = ttk.Frame(tf)
@@ -3335,7 +3397,7 @@ class VideoMixer:
             return a * mix_a + b * mix_b
     
     def blend_frames(self, fa, oa, fb, ob, bp):
-        mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp) * 0.5))
+        mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp, self.bpm, self.env_attack, self.env_release) * 0.5))
         if fa is None:
             fa = np.zeros_like(self.blend_buffer)
             oa = 1.0
@@ -3527,7 +3589,7 @@ class VideoMixer:
                 if r:
                     fb, ob = r
                 
-                mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp) * 0.5))
+                mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp, self.bpm, self.env_attack, self.env_release) * 0.5))
                 
                 if fa is None:
                     fa = np.zeros((h, w, 3), dtype=np.float32)
@@ -4047,7 +4109,8 @@ class VideoMixer:
              'mix_mod': self.mix_mod.to_dict(), 'ch_a': self.channel_a.to_dict(True), 'ch_b': self.channel_b.to_dict(True),
              'gloop_en': self.gloop_en.get(), 'gloop_start': self.gloop_start.get(), 'gloop_end': self.gloop_end.get(),
              'audio_en': self.audio_en.get(), 'latency': self.latency_ms.get(),
-             'audio_path': self.audio_track.path if hasattr(self.audio_track, 'path') and self.audio_track.path else None}
+             'audio_path': self.audio_track.path if hasattr(self.audio_track, 'path') and self.audio_track.path else None,
+             'env_attack': self.env_attack, 'env_release': self.env_release}
         with open(p, 'w') as f:
             json.dump(d, f, indent=2)
         self.status.set("Saved project")
@@ -4112,6 +4175,12 @@ class VideoMixer:
         if 'ch_b' in d:
             self.channel_b.from_dict(d['ch_b'], True)
             self.update_ch_ui(self.channel_b, self.ch_b)
+        if 'env_attack' in d:
+            self.env_attack = d['env_attack']
+            self.env_attack_var.set(self.env_attack)
+        if 'env_release' in d:
+            self.env_release = d['env_release']
+            self.env_release_var.set(self.env_release)
 
 
 class ExportDialog:
