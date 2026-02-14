@@ -9,6 +9,7 @@ import threading
 import time
 import os
 import json
+from datetime import datetime
 try:
     import winsound
 except ImportError:
@@ -2001,6 +2002,60 @@ class TimelineWidget(tk.Canvas):
         """Handle canvas resize."""
         self.redraw()
 
+class RecordingThread(threading.Thread):
+    """High-priority thread for writing recording frames to disk."""
+    def __init__(self, output_path, fourcc, fps, size):
+        super().__init__(daemon=True)
+        self.output_path = output_path
+        self.fourcc = fourcc
+        self.fps = fps
+        self.size = size
+        self.running = False
+        self.frame_queue = queue.Queue(maxsize=60)  # Buffer up to 60 frames
+        self.writer = None
+        
+    def run(self):
+        """Run the recording thread at high priority."""
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            k.SetThreadPriority(k.GetCurrentThread(), 15)  # THREAD_PRIORITY_TIME_CRITICAL
+        except (AttributeError, ImportError, OSError):
+            # Windows-specific priority setting not available on this platform
+            pass
+        
+        try:
+            self.writer = cv2.VideoWriter(self.output_path, self.fourcc, self.fps, self.size)
+            if not self.writer.isOpened():
+                print(f"Failed to open video writer: {self.output_path}")
+                return
+            
+            while self.running or not self.frame_queue.empty():
+                try:
+                    frame = self.frame_queue.get(timeout=0.1)
+                    if frame is not None:
+                        self.writer.write(frame)
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    print(f"Error writing frame: {e}")
+        finally:
+            if self.writer:
+                self.writer.release()
+                
+    def add_frame(self, frame):
+        """Add a frame to the recording queue."""
+        try:
+            self.frame_queue.put_nowait(frame)
+            return True
+        except queue.Full:
+            print("Warning: Recording frame dropped (queue full)")
+            return False
+            
+    def stop_recording(self):
+        """Signal the thread to stop and wait for it to finish."""
+        self.running = False
+
 class VideoProcessor(threading.Thread):
     def __init__(self, mixer):
         super().__init__(daemon=True)
@@ -2174,6 +2229,12 @@ class VideoMixer:
         self.blend_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.float32)
         self.output_buffer = np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
         self.status = tk.StringVar(value="Ready")
+        
+        # Recording state
+        self.recording = False
+        self.recording_thread = None
+        self.recording_fps = 30  # Default recording FPS
+        
         self.setup_ui()
         self.update_loop()
         
@@ -2381,6 +2442,12 @@ class VideoMixer:
         tk.Button(row3, text="Rew", command=self.rewind, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
         tk.Button(row3, text="Reset", command=self.reset_all, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
         tk.Button(row3, text="Param Reset", command=self.reset_parameters, font=("Arial", 11), width=10).pack(side=tk.LEFT, padx=2)
+        
+        # Recording button and indicator
+        self.record_btn = tk.Button(row3, text="● Record", command=self.toggle_recording, font=("Arial", 11), width=10, bg="lightgray")
+        self.record_btn.pack(side=tk.LEFT, padx=2)
+        self.recording_indicator = tk.Canvas(row3, width=20, height=20, bg="gray", highlightthickness=1)
+        self.recording_indicator.pack(side=tk.LEFT, padx=3)
         
         ttk.Label(row3, text="Offset (ms):").pack(side=tk.LEFT, padx=(10, 5))
         self.latency_ms = tk.DoubleVar(value=0.0)
@@ -3234,6 +3301,9 @@ class VideoMixer:
             self.play_btn.config(text="Play")
             self.sync_var.set("")
             self.sync_ready = False
+            # Stop recording if active
+            if self.recording:
+                self.stop_recording()
         else:
             self.playing = True
             self.play_btn.config(text="Pause")
@@ -3249,6 +3319,9 @@ class VideoMixer:
         self.play_btn.config(text="Play")
         self.sync_var.set("")
         self.sync_ready = False
+        # Stop recording if active
+        if self.recording:
+            self.stop_recording()
         
     def rewind(self):
         was = self.playing
@@ -3275,6 +3348,12 @@ class VideoMixer:
             img = Image.fromarray(rgb)
             self.preview_photo = ImageTk.PhotoImage(img)
             self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
+            
+            # Capture frame for recording if active
+            if self.recording and self.recording_thread:
+                # Convert RGB back to BGR for OpenCV
+                bgr_frame = blended[:, :, ::-1].copy()
+                self.recording_thread.add_frame(bgr_frame)
         
         # Update timeline playhead
         if hasattr(self, 'timeline_widget'):
@@ -3375,6 +3454,86 @@ class VideoMixer:
             self.channel_a.set_target_size(self.preview_width, self.preview_height)
             self.channel_b.set_target_size(self.preview_width, self.preview_height)
             self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+    
+    def toggle_recording(self):
+        """Toggle recording on/off."""
+        if self.recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+    
+    def start_recording(self):
+        """Start real-time recording of the mixed video output."""
+        if self.recording:
+            return
+        
+        if not self.playing:
+            messagebox.showwarning("Recording", "Please start playback before recording")
+            return
+        
+        if not self.channel_a.cap and not self.channel_b.cap:
+            messagebox.showerror("Error", "Load at least one video before recording")
+            return
+        
+        try:
+            # Create timestamped filename
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            filename = f"videomixer_recording_{timestamp}.avi"
+            
+            # Get Downloads folder path (cross-platform)
+            downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+            if not os.path.exists(downloads_folder):
+                os.makedirs(downloads_folder)
+            
+            output_path = os.path.join(downloads_folder, filename)
+            
+            # Use MJPG codec for AVI format
+            # MJPG provides good balance of speed/quality for real-time recording
+            # and has wide compatibility without requiring external codecs
+            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            size = (self.preview_width, self.preview_height)
+            
+            # Create and start recording thread
+            self.recording_thread = RecordingThread(output_path, fourcc, self.recording_fps, size)
+            self.recording_thread.running = True
+            self.recording_thread.start()
+            
+            self.recording = True
+            self.record_btn.config(text="⬛ Stop Rec", bg="red")
+            self.recording_indicator.config(bg="red")
+            self.status.set(f"Recording to: {filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Recording Error", f"Failed to start recording: {str(e)}")
+            self.recording = False
+    
+    def stop_recording(self):
+        """Stop the current recording and finalize the file."""
+        if not self.recording:
+            return
+        
+        try:
+            self.recording = False
+            
+            if self.recording_thread:
+                self.recording_thread.stop_recording()
+                # Wait for thread to finish writing (with timeout)
+                self.recording_thread.join(timeout=5.0)
+                
+                output_path = self.recording_thread.output_path
+                self.recording_thread = None
+                
+                self.record_btn.config(text="● Record", bg="lightgray")
+                self.recording_indicator.config(bg="gray")
+                
+                # Show completion message
+                self.status.set(f"Recording saved: {os.path.basename(output_path)}")
+                messagebox.showinfo("Recording Complete", f"Saved to:\n{output_path}")
+            
+        except Exception as e:
+            messagebox.showerror("Recording Error", f"Error stopping recording: {str(e)}")
+            self.record_btn.config(text="● Record", bg="lightgray")
+            self.recording_indicator.config(bg="gray")
             
     def save_preset(self):
         p = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
