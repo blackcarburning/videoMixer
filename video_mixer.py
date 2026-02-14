@@ -2234,6 +2234,11 @@ class VideoMixer:
         self.recording = False
         self.recording_thread = None
         self.recording_fps = 30  # Default recording FPS
+        self.countdown_active = False
+        self.countdown_value = 0
+        self.countdown_timer_id = None
+        self.metronome_state_before_recording = False
+        self.recording_output_path = None
         
         self.setup_ui()
         self.update_loop()
@@ -2397,6 +2402,13 @@ class VideoMixer:
         ttk.Label(row1, textvariable=self.beat_var, font=("Consolas", 10)).pack(side=tk.LEFT, padx=10)
         self.beat_flash = tk.Canvas(row1, width=25, height=25, bg="gray", highlightthickness=1)
         self.beat_flash.pack(side=tk.LEFT, padx=3)
+        
+        # Countdown label for recording
+        self.countdown_var = tk.StringVar(value="")
+        self.countdown_label = ttk.Label(row1, textvariable=self.countdown_var, 
+                                         font=("Arial", 16, "bold"), foreground="red")
+        self.countdown_label.pack(side=tk.LEFT, padx=10)
+        
         self.sync_var = tk.StringVar(value="")
         ttk.Label(row1, textvariable=self.sync_var, foreground="green").pack(side=tk.LEFT, padx=5)
         self.fps_var = tk.StringVar(value="")
@@ -3457,55 +3469,123 @@ class VideoMixer:
     
     def toggle_recording(self):
         """Toggle recording on/off."""
-        if self.recording:
+        if self.countdown_active:
+            # Cancel countdown
+            self.cancel_countdown()
+        elif self.recording:
             self.stop_recording()
         else:
             self.start_recording()
     
+    def cancel_countdown(self):
+        """Cancel an active countdown."""
+        if self.countdown_timer_id:
+            self.root.after_cancel(self.countdown_timer_id)
+            self.countdown_timer_id = None
+        self.countdown_active = False
+        self.countdown_var.set("")
+        self.record_btn.config(text="● Record", bg="lightgray")
+        self.status.set("Recording cancelled")
+    
+    def countdown_tick(self):
+        """Handle countdown timer ticks."""
+        if self.countdown_value > 0:
+            # Show countdown number
+            self.countdown_var.set(f"{self.countdown_value}")
+            self.status.set(f"Recording starts in {self.countdown_value}...")
+            self.countdown_value -= 1
+            self.countdown_timer_id = self.root.after(1000, self.countdown_tick)
+        else:
+            # Countdown finished - start recording
+            self.countdown_var.set("Recording!")
+            self.countdown_active = False
+            self.countdown_timer_id = None
+            
+            # Stop playback if active
+            if self.playing:
+                self.playing = False
+                self.metronome.stop()
+                self.processor.stop_proc()
+                self.audio_track.stop()
+                self.sync_ready = False
+            
+            # Reset to beat 0 and start playback
+            self.playing = True
+            self.play_btn.config(text="Pause")
+            if not self.processor.is_alive():
+                self.processor = VideoProcessor(self)
+            
+            # Force global loop start to 0 for recording
+            old_loop_start = self.global_loop_start
+            self.global_loop_start = 0
+            self.gloop_start.set(0)
+            
+            # Start playback from beat 0
+            self.sync_start()
+            
+            # Restore loop start (user might want it for after recording)
+            self.global_loop_start = old_loop_start
+            self.gloop_start.set(old_loop_start)
+            
+            # Now actually start the recording
+            self.begin_actual_recording()
+    
     def start_recording(self):
-        """Start real-time recording of the mixed video output."""
-        if self.recording:
-            return
-        
-        if not self.playing:
-            messagebox.showwarning("Recording", "Please start playback before recording")
+        """Start countdown before recording."""
+        if self.recording or self.countdown_active:
             return
         
         if not self.channel_a.cap and not self.channel_b.cap:
             messagebox.showerror("Error", "Load at least one video before recording")
             return
         
+        # Save metronome state and disable it for recording
+        self.metronome_state_before_recording = self.metro_var.get()
+        if self.metronome_state_before_recording:
+            self.metro_var.set(False)
+            self.metronome.enabled = False
+        
+        # Prepare recording path
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"videomixer_recording_{timestamp}.avi"
+        downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+        if not os.path.exists(downloads_folder):
+            os.makedirs(downloads_folder)
+        self.recording_output_path = os.path.join(downloads_folder, filename)
+        
+        # Start countdown
+        self.countdown_active = True
+        self.countdown_value = 3
+        self.record_btn.config(text="⬛ Cancel", bg="orange")
+        self.countdown_tick()
+    
+    def begin_actual_recording(self):
+        """Actually start the recording after countdown."""
         try:
-            # Create timestamped filename
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename = f"videomixer_recording_{timestamp}.avi"
-            
-            # Get Downloads folder path (cross-platform)
-            downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
-            if not os.path.exists(downloads_folder):
-                os.makedirs(downloads_folder)
-            
-            output_path = os.path.join(downloads_folder, filename)
-            
             # Use MJPG codec for AVI format
-            # MJPG provides good balance of speed/quality for real-time recording
-            # and has wide compatibility without requiring external codecs
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
             size = (self.preview_width, self.preview_height)
             
             # Create and start recording thread
-            self.recording_thread = RecordingThread(output_path, fourcc, self.recording_fps, size)
+            self.recording_thread = RecordingThread(self.recording_output_path, fourcc, self.recording_fps, size)
             self.recording_thread.running = True
             self.recording_thread.start()
             
             self.recording = True
             self.record_btn.config(text="⬛ Stop Rec", bg="red")
             self.recording_indicator.config(bg="red")
-            self.status.set(f"Recording to: {filename}")
+            self.status.set(f"Recording to: {os.path.basename(self.recording_output_path)}")
+            
+            # Clear countdown display after a moment
+            self.root.after(2000, lambda: self.countdown_var.set(""))
             
         except Exception as e:
             messagebox.showerror("Recording Error", f"Failed to start recording: {str(e)}")
             self.recording = False
+            self.countdown_var.set("")
+            # Restore metronome state
+            self.metro_var.set(self.metronome_state_before_recording)
+            self.metronome.enabled = self.metronome_state_before_recording
     
     def stop_recording(self):
         """Stop the current recording and finalize the file."""
@@ -3526,14 +3606,78 @@ class VideoMixer:
                 self.record_btn.config(text="● Record", bg="lightgray")
                 self.recording_indicator.config(bg="gray")
                 
-                # Show completion message
-                self.status.set(f"Recording saved: {os.path.basename(output_path)}")
-                messagebox.showinfo("Recording Complete", f"Saved to:\n{output_path}")
+                # Restore metronome state
+                self.metro_var.set(self.metronome_state_before_recording)
+                self.metronome.enabled = self.metronome_state_before_recording
+                
+                # Add audio to video if audio is loaded
+                if self.audio_track.path and os.path.exists(self.audio_track.path):
+                    self.status.set("Adding audio to recording...")
+                    threading.Thread(target=self.mux_audio_to_video, 
+                                   args=(output_path, self.audio_track.path), 
+                                   daemon=True).start()
+                else:
+                    # No audio to add
+                    self.status.set(f"Recording saved: {os.path.basename(output_path)}")
+                    messagebox.showinfo("Recording Complete", f"Saved to:\n{output_path}")
             
         except Exception as e:
             messagebox.showerror("Recording Error", f"Error stopping recording: {str(e)}")
             self.record_btn.config(text="● Record", bg="lightgray")
             self.recording_indicator.config(bg="gray")
+            # Restore metronome state even on error
+            self.metro_var.set(self.metronome_state_before_recording)
+            self.metronome.enabled = self.metronome_state_before_recording
+    
+    def mux_audio_to_video(self, video_path, audio_path):
+        """Add audio track to the recorded video using moviepy."""
+        try:
+            from moviepy.editor import VideoFileClip, AudioFileClip
+            
+            # Load video and audio
+            video_clip = VideoFileClip(video_path)
+            audio_clip = AudioFileClip(audio_path)
+            
+            # Trim audio to match video duration or loop if shorter
+            if audio_clip.duration < video_clip.duration:
+                # Audio is shorter, we'll just use what we have
+                audio_clip = audio_clip.subclip(0, min(audio_clip.duration, video_clip.duration))
+            else:
+                # Audio is longer or same, trim to video length
+                audio_clip = audio_clip.subclip(0, video_clip.duration)
+            
+            # Set audio to video
+            final_clip = video_clip.set_audio(audio_clip)
+            
+            # Create output path (replace .avi with _with_audio.mp4)
+            base_path = os.path.splitext(video_path)[0]
+            output_with_audio = f"{base_path}_with_audio.mp4"
+            
+            # Write the final video with audio
+            final_clip.write_videofile(output_with_audio, codec='libx264', audio_codec='aac', 
+                                      fps=self.recording_fps, logger=None)
+            
+            # Close clips
+            video_clip.close()
+            audio_clip.close()
+            final_clip.close()
+            
+            # Delete the original video without audio
+            try:
+                os.remove(video_path)
+            except:
+                pass
+            
+            self.root.after(0, lambda: self.status.set(f"Recording saved: {os.path.basename(output_with_audio)}"))
+            self.root.after(0, lambda: messagebox.showinfo("Recording Complete", 
+                                                           f"Saved with audio to:\n{output_with_audio}"))
+            
+        except Exception as e:
+            # If muxing fails, still keep the video without audio
+            self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
+            self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
+                                                              f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed: {str(e)}"))
+            print(f"Audio muxing error: {e}")
             
     def save_preset(self):
         p = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
