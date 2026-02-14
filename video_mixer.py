@@ -2029,7 +2029,6 @@ class RecordingThread(threading.Thread):
             pass
         
         # Mark start time
-        import time
         self.recording_start_time = time.perf_counter()
         
         try:
@@ -2201,6 +2200,9 @@ class VideoMixer:
         "Medium": 360,
         "Large": 480
     }
+    
+    # FPS threshold for determining significant difference between actual and declared FPS
+    FPS_DIFFERENCE_THRESHOLD = 1.0
     
     def __init__(self, root):
         self.root = root
@@ -3784,7 +3786,7 @@ class VideoMixer:
                     print(f"Expected duration at {declared_fps} FPS: {frame_count / declared_fps:.2f}s")
                 
                 # Use actual FPS if it differs significantly from declared FPS
-                use_fps = actual_fps if actual_fps and abs(actual_fps - declared_fps) > 1 else declared_fps
+                use_fps = actual_fps if actual_fps and abs(actual_fps - declared_fps) > self.FPS_DIFFERENCE_THRESHOLD else declared_fps
                 print(f"Using FPS for muxing: {use_fps:.2f}")
             else:
                 # Fallback to declared FPS if no metrics available
@@ -3834,7 +3836,7 @@ class VideoMixer:
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
-                    '-r', str(declared_fps),  # Output framerate
+                    '-r', str(use_fps),  # Output framerate (match input to avoid duplication/dropping)
                     '-c:a', 'aac',
                     '-b:a', '192k',
                     '-vsync', 'cfr',  # Constant frame rate
