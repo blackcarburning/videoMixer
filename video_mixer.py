@@ -2002,73 +2002,98 @@ class TimelineWidget(tk.Canvas):
         """Handle canvas resize."""
         self.redraw()
 
-class RecordingThread(threading.Thread):
-    """High-priority thread for writing recording frames to disk."""
-    def __init__(self, output_path, fourcc, fps, size):
+class FrameRecorder(threading.Thread):
+    """Timer-based thread that captures frames at exact intervals."""
+    def __init__(self, mixer, fps, output_path, width, height):
         super().__init__(daemon=True)
-        self.output_path = output_path
-        self.fourcc = fourcc
+        self.mixer = mixer
         self.fps = fps
-        self.size = size
+        self.frame_interval = 1.0 / fps  # e.g., 1/24 = 0.0417 seconds
+        self.output_path = output_path
+        self.width = width
+        self.height = height
         self.running = False
-        self.frame_queue = queue.Queue(maxsize=60)  # Buffer up to 60 frames
         self.writer = None
+        self.frame_count = 0
+        self.dropped_frames = 0  # Track dropped frames
         # Track actual recording metrics
         self.recording_start_time = None
         self.recording_end_time = None
         self.recorded_frame_count = 0
         
     def run(self):
-        """Run the recording thread at high priority."""
+        """Run the recording thread at high priority with fixed-interval frame capture."""
         try:
             import ctypes
             k = ctypes.windll.kernel32
-            k.SetThreadPriority(k.GetCurrentThread(), 15)  # THREAD_PRIORITY_TIME_CRITICAL
+            k.SetThreadPriority(k.GetCurrentThread(), 2)  # THREAD_PRIORITY_HIGHEST
         except (AttributeError, ImportError, OSError):
             # Windows-specific priority setting not available on this platform
             pass
         
-        # Mark start time
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        self.writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, (self.width, self.height))
+        
+        if not self.writer.isOpened():
+            print(f"Failed to open video writer: {self.output_path}")
+            return
+        
+        print(f"=== FrameRecorder Started ===")
+        print(f"Recording at FPS: {self.fps}")
+        print(f"Frame interval: {self.frame_interval:.4f}s")
+        print(f"Output path: {self.output_path}")
+        
+        self.running = True
         self.recording_start_time = time.perf_counter()
+        next_frame_time = self.recording_start_time
         
-        try:
-            self.writer = cv2.VideoWriter(self.output_path, self.fourcc, self.fps, self.size)
-            if not self.writer.isOpened():
-                print(f"Failed to open video writer: {self.output_path}")
-                return
+        while self.running:
+            now = time.perf_counter()
             
-            while self.running or not self.frame_queue.empty():
-                try:
-                    frame = self.frame_queue.get(timeout=0.1)
-                    if frame is not None:
-                        self.writer.write(frame)
-                except queue.Empty:
-                    continue
-                except Exception as e:
-                    print(f"Error writing frame: {e}")
-        finally:
-            # Mark end time
-            self.recording_end_time = time.perf_counter()
-            if self.writer:
-                self.writer.release()
+            if now >= next_frame_time:
+                # Capture current frame from mixer
+                frame = self.mixer.get_current_frame()
+                if frame is not None:
+                    self.writer.write(frame)
+                    self.frame_count += 1
+                    self.recorded_frame_count += 1
                 
-    def add_frame(self, frame):
-        """Add a frame to the recording queue.
+                # Schedule next frame at exact interval
+                next_frame_time += self.frame_interval
+                
+                # If we've fallen behind, reset to current time + interval
+                # This prevents accumulating delay but means we'll drop frames if system can't keep up
+                if next_frame_time < now:
+                    # Calculate approximately how many frames were dropped
+                    frames_behind = int((now - next_frame_time) / self.frame_interval)
+                    if frames_behind > 0:
+                        self.dropped_frames += frames_behind
+                        print(f"Warning: Dropped approximately {frames_behind} frame(s) due to timing lag")
+                    next_frame_time = now + self.frame_interval
+            else:
+                # Sleep until next frame time (with small buffer)
+                sleep_time = next_frame_time - now - 0.001
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
         
-        Note: Frame count is incremented when added to queue, not when written.
-        If frames are dropped (queue full), the actual FPS will be slightly
-        over-estimated, but this is conservative and won't cause sync issues.
-        """
-        try:
-            self.frame_queue.put_nowait(frame)
-            self.recorded_frame_count += 1
-            return True
-        except queue.Full:
-            print("Warning: Recording frame dropped (queue full)")
-            return False
-            
-    def stop_recording(self):
-        """Signal the thread to stop and wait for it to finish."""
+        self.recording_end_time = time.perf_counter()
+        self.writer.release()
+        
+        # Calculate and log recording metrics
+        actual_duration = self.recording_end_time - self.recording_start_time
+        actual_fps = self.recorded_frame_count / actual_duration if actual_duration > 0 else self.fps
+        expected_frames = int(actual_duration * self.fps)
+        
+        print(f"=== FrameRecorder Stopped ===")
+        print(f"Captured {self.recorded_frame_count} frames in {actual_duration:.2f}s")
+        print(f"Effective FPS: {actual_fps:.2f}")
+        print(f"Expected frames: {expected_frames}")
+        print(f"Frame difference: {self.recorded_frame_count - expected_frames}")
+        if self.dropped_frames > 0:
+            print(f"WARNING: Dropped {self.dropped_frames} frame(s) during recording")
+    
+    def stop(self):
+        """Signal the thread to stop."""
         self.running = False
 
 class VideoProcessor(threading.Thread):
@@ -2268,7 +2293,7 @@ class VideoMixer:
         self.countdown_timer_id = None
         self.metronome_state_before_recording = False
         self.recording_output_path = None
-        self.recording_output_path = None
+        self.last_rendered_frame = None  # Cache last frame for FrameRecorder
         
         self.setup_ui()
         self.update_loop()
@@ -3332,6 +3357,17 @@ class VideoMixer:
         self.output_buffer[:] = self.blend_buffer.astype(np.uint8)
         return self.output_buffer
     
+    def get_current_frame(self):
+        """Get the current blended frame for recording.
+        
+        This method returns the last rendered frame in BGR format (ready for cv2.VideoWriter).
+        Returns None if no frame is available.
+        """
+        if self.last_rendered_frame is None:
+            return None
+        
+        return self.last_rendered_frame
+    
     def sync_start(self):
         self.sync_var.set("Syncing...")
         self.root.update()
@@ -3424,11 +3460,9 @@ class VideoMixer:
             self.preview_photo = ImageTk.PhotoImage(img)
             self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
             
-            # Capture frame for recording if active
-            if self.recording and self.recording_thread:
-                # Convert RGB back to BGR for OpenCV
-                bgr_frame = blended[:, :, ::-1].copy()
-                self.recording_thread.add_frame(bgr_frame)
+            # Cache the last rendered frame in BGR format for FrameRecorder
+            # Convert RGB back to BGR for OpenCV
+            self.last_rendered_frame = blended[:, :, ::-1].copy()
         
         # Update timeline playhead
         if hasattr(self, 'timeline_widget'):
@@ -3635,16 +3669,17 @@ class VideoMixer:
     def begin_actual_recording(self):
         """Actually start the recording after countdown."""
         try:
-            # Use MJPG codec for AVI format (most reliable)
-            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-            size = (self.preview_width, self.preview_height)
-            
             # Get FPS from the dropdown selection
             fps = int(self.record_fps.get())
             
-            # Create and start recording thread
-            self.recording_thread = RecordingThread(self.recording_output_path, fourcc, fps, size)
-            self.recording_thread.running = True
+            # Create and start FrameRecorder thread
+            self.recording_thread = FrameRecorder(
+                self, 
+                fps, 
+                self.recording_output_path, 
+                self.preview_width, 
+                self.preview_height
+            )
             self.recording_thread.start()
             
             self.recording = True
@@ -3673,8 +3708,8 @@ class VideoMixer:
             self.recording = False
             
             if self.recording_thread:
-                print("Stopping recording thread...")
-                self.recording_thread.stop_recording()
+                print("Stopping FrameRecorder thread...")
+                self.recording_thread.stop()
                 # Wait for thread to finish writing (with timeout)
                 self.recording_thread.join(timeout=5.0)
                 
@@ -3838,41 +3873,47 @@ class VideoMixer:
             if output_format == 'mp4':
                 cmd = [
                     'ffmpeg', '-y',
-                    '-r', str(use_fps),  # Force input framerate
+                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
+                    '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
-                    '-r', str(use_fps),  # Output framerate (match input for 1:1 frame mapping)
+                    '-r', str(use_fps),  # Output framerate
+                    '-vsync', 'cfr',  # Constant frame rate
                     '-c:a', 'aac',
                     '-b:a', '192k',
-                    '-vsync', 'cfr',  # Constant frame rate
+                    '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
                 ]
             elif output_format == 'mov':
                 cmd = [
                     'ffmpeg', '-y',
-                    '-r', str(use_fps),  # Force input framerate
+                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
+                    '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
-                    '-c:v', 'copy',  # Copy video stream
+                    '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
                     '-b:a', '192k',
                     '-vsync', 'cfr',  # Constant frame rate
+                    '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
                 ]
             else:  # avi
                 cmd = [
                     'ffmpeg', '-y',
-                    '-r', str(use_fps),  # Force input framerate
+                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
+                    '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
                     '-b:a', '192k',
                     '-vsync', 'cfr',  # Constant frame rate
+                    '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
                 ]
