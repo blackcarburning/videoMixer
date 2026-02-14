@@ -941,6 +941,11 @@ class VideoChannel:
                         trigger_enabled=False, trigger_beat=0.0, trigger_duration=1.0, mixer=None):
         """Get disintegration amount based on mode"""
         
+        # Get parameters from mixer if available (for LFO mode)
+        bpm = getattr(mixer, 'bpm', 120.0) if mixer else 120.0
+        env_attack = getattr(mixer, 'env_attack', 0.1) if mixer else 0.1
+        env_release = getattr(mixer, 'env_release', 0.5) if mixer else 0.5
+        
         # Trigger mode - only works when global loop is enabled
         if trigger_enabled and mixer is not None and mixer.global_loop_enabled:
             # Calculate beat position within the global loop
