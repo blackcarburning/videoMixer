@@ -3543,21 +3543,20 @@ class VideoMixer:
                 blended, bp = fd
                 if blended is None:
                     print("WARNING: blended frame is None in update_loop")
-                    return
-                if blended.size == 0:
+                elif blended.size == 0:
                     print("WARNING: blended frame has size 0 in update_loop")
-                    return
-                self.beat_position = bp
-                self.beat_var.set(f"Beat: {int(round(bp))}")
-                self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
-                rgb = blended[:, :, ::-1]
-                img = Image.fromarray(rgb)
-                self.preview_photo = ImageTk.PhotoImage(img)
-                self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
-                
-                # Cache the last rendered frame in BGR format for FrameRecorder
-                # blended is already in BGR from OpenCV processing
-                self.last_rendered_frame = blended.copy()
+                else:
+                    self.beat_position = bp
+                    self.beat_var.set(f"Beat: {int(round(bp))}")
+                    self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
+                    rgb = blended[:, :, ::-1]
+                    img = Image.fromarray(rgb)
+                    self.preview_photo = ImageTk.PhotoImage(img)
+                    self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
+                    
+                    # Cache the last rendered frame in BGR format for FrameRecorder
+                    # blended is already in BGR from OpenCV processing
+                    self.last_rendered_frame = blended.copy()
         except Exception as e:
             print(f"ERROR in update_loop: {e}")
             import traceback
