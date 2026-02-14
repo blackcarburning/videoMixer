@@ -3486,6 +3486,10 @@ class VideoMixer:
         self.countdown_var.set("")
         self.record_btn.config(text="● Record", bg="lightgray")
         self.status.set("Recording cancelled")
+        
+        # Restore metronome state if it was changed
+        self.metro_var.set(self.metronome_state_before_recording)
+        self.metronome.enabled = self.metronome_state_before_recording
     
     def countdown_tick(self):
         """Handle countdown timer ticks."""
