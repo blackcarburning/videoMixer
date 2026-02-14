@@ -3551,7 +3551,8 @@ class VideoMixer:
         
         # Prepare recording path
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"videomixer_recording_{timestamp}.avi"
+        bpm_value = int(self.bpm)
+        filename = f"videomixer_recording_{bpm_value}bpm_{timestamp}.avi"
         downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
         if not os.path.exists(downloads_folder):
             os.makedirs(downloads_folder)
