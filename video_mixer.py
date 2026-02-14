@@ -3461,8 +3461,8 @@ class VideoMixer:
             self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
             
             # Cache the last rendered frame in BGR format for FrameRecorder
-            # Convert RGB back to BGR for OpenCV
-            self.last_rendered_frame = blended[:, :, ::-1].copy()
+            # blended is already in BGR from OpenCV processing
+            self.last_rendered_frame = blended.copy()
         
         # Update timeline playhead
         if hasattr(self, 'timeline_widget'):
@@ -3873,14 +3873,13 @@ class VideoMixer:
             if output_format == 'mp4':
                 cmd = [
                     'ffmpeg', '-y',
-                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
                     '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
                     '-r', str(use_fps),  # Output framerate
-                    '-vsync', 'cfr',  # Constant frame rate
+                    '-fps_mode', 'cfr',  # Constant frame rate
                     '-c:a', 'aac',
                     '-b:a', '192k',
                     '-async', '1',  # Audio sync
@@ -3890,14 +3889,13 @@ class VideoMixer:
             elif output_format == 'mov':
                 cmd = [
                     'ffmpeg', '-y',
-                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
                     '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
                     '-b:a', '192k',
-                    '-vsync', 'cfr',  # Constant frame rate
+                    '-fps_mode', 'cfr',  # Constant frame rate
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
@@ -3905,14 +3903,13 @@ class VideoMixer:
             else:  # avi
                 cmd = [
                     'ffmpeg', '-y',
-                    '-framerate', str(use_fps),  # Input framerate
                     '-i', video_path,
                     '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
                     '-b:a', '192k',
-                    '-vsync', 'cfr',  # Constant frame rate
+                    '-fps_mode', 'cfr',  # Constant frame rate
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
