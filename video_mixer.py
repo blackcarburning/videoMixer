@@ -524,6 +524,12 @@ class VideoChannel:
         self.dis_rain_trigger_active = False
         self.dis_rain_trigger_start_beat = 0
         
+        # Manual effects (MAN tab)
+        self.manual_blur = 0.0
+        self.manual_zoom = 0.0
+        self.manual_posterize = 0
+        self.manual_invert = False
+        
         # Pre-generate noise patterns for effects (separate for each effect)
         self.dis_particle_noise = None
         self.dis_thanos_noise = None
@@ -625,7 +631,9 @@ class VideoChannel:
              'dis_rain_enabled': self.dis_rain_enabled, 'dis_rain_amount': self.dis_rain_amount,
              'dis_rain_mode': self.dis_rain_mode, 'dis_rain_mod': self.dis_rain_mod.to_dict(),
              'dis_rain_trigger_enabled': self.dis_rain_trigger_enabled, 'dis_rain_trigger_beat': self.dis_rain_trigger_beat,
-             'dis_rain_trigger_duration': self.dis_rain_trigger_duration}
+             'dis_rain_trigger_duration': self.dis_rain_trigger_duration,
+             'manual_blur': self.manual_blur, 'manual_zoom': self.manual_zoom,
+             'manual_posterize': self.manual_posterize, 'manual_invert': self.manual_invert}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -691,6 +699,11 @@ class VideoChannel:
             self.dis_rain_trigger_enabled = d.get('dis_rain_trigger_enabled', False)
             self.dis_rain_trigger_beat = d.get('dis_rain_trigger_beat', 0.0)
             self.dis_rain_trigger_duration = d.get('dis_rain_trigger_duration', 1.0)
+            
+            self.manual_blur = d.get('manual_blur', 0.0)
+            self.manual_zoom = d.get('manual_zoom', 0.0)
+            self.manual_posterize = d.get('manual_posterize', 0)
+            self.manual_invert = d.get('manual_invert', False)
             
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
@@ -880,6 +893,11 @@ class VideoChannel:
             self.dis_rain_trigger_duration = 1.0
             self.dis_rain_trigger_active = False
             self.dis_rain_trigger_start_beat = 0
+            
+            self.manual_blur = 0.0
+            self.manual_zoom = 0.0
+            self.manual_posterize = 0
+            self.manual_invert = False
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -1553,6 +1571,32 @@ class VideoChannel:
                 bpm, env_attack, env_release
             )
             frame = self._apply_digital_rain(frame, amt, beat_pos)
+
+        # Manual effects (MAN tab)
+        # Manual Blur
+        if self.manual_blur > 0:
+            frame = frame.copy()
+            k = int(self.manual_blur * 50) * 2 + 1
+            frame = cv2.GaussianBlur(frame, (k, k), 0)
+
+        # Manual Zoom
+        if self.manual_zoom > 0:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            scale = 1.0 + self.manual_zoom * 2.0  # Max 3x zoom
+            M = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
+            frame = cv2.warpAffine(frame, M, (w, h))
+
+        # Manual Posterize
+        if self.manual_posterize > 0:
+            frame = frame.copy()
+            levels = max(2, 256 - self.manual_posterize)  # 256 levels down to 2 levels
+            frame = np.floor(frame * levels) / levels
+
+        # Manual Invert
+        if self.manual_invert:
+            frame = frame.copy()
+            frame = 1.0 - frame
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
@@ -3003,12 +3047,14 @@ class VideoMixer:
         tab_seq = ttk.Frame(nb, padding=5)
         tab_bonus = ttk.Frame(nb, padding=5)
         tab_dis = ttk.Frame(nb, padding=5)
+        tab_man = ttk.Frame(nb, padding=5)
         nb.add(tab_main, text="Main")
         nb.add(tab_loop, text="Loop/Time")
         nb.add(tab_fx, text="FX")
         nb.add(tab_seq, text="Seq")
         nb.add(tab_bonus, text="Bonus")
         nb.add(tab_dis, text="DIS")
+        nb.add(tab_man, text="MAN")
         
         row1 = ttk.Frame(tab_main)
         row1.pack(fill=tk.X, pady=2)
@@ -3347,6 +3393,43 @@ class VideoMixer:
         setup_dis_effect(tab_dis, 'dis_ember', 'Ember:')
         setup_dis_effect(tab_dis, 'dis_rain', 'Rain:')
         
+        # MAN (Manual) Tab
+        fr_man_blur = ttk.Frame(tab_man)
+        fr_man_blur.pack(fill=tk.X, pady=5)
+        ttk.Label(fr_man_blur, text="Blur:", width=8).pack(side=tk.LEFT)
+        c['manual_blur'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_man_blur, from_=0.0, to=1.0, variable=c['manual_blur'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'manual_blur', float(v))).pack(side=tk.LEFT)
+        c['manual_blur_lbl'] = ttk.Label(fr_man_blur, text="0.000", width=6)
+        c['manual_blur_lbl'].pack(side=tk.LEFT, padx=5)
+        c['manual_blur'].trace_add('write', lambda *args: c['manual_blur_lbl'].config(text=f"{c['manual_blur'].get():.3f}"))
+
+        fr_man_zoom = ttk.Frame(tab_man)
+        fr_man_zoom.pack(fill=tk.X, pady=5)
+        ttk.Label(fr_man_zoom, text="Zoom:", width=8).pack(side=tk.LEFT)
+        c['manual_zoom'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_man_zoom, from_=0.0, to=1.0, variable=c['manual_zoom'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'manual_zoom', float(v))).pack(side=tk.LEFT)
+        c['manual_zoom_lbl'] = ttk.Label(fr_man_zoom, text="0.000", width=6)
+        c['manual_zoom_lbl'].pack(side=tk.LEFT, padx=5)
+        c['manual_zoom'].trace_add('write', lambda *args: c['manual_zoom_lbl'].config(text=f"{c['manual_zoom'].get():.3f}"))
+
+        fr_man_post = ttk.Frame(tab_man)
+        fr_man_post.pack(fill=tk.X, pady=5)
+        ttk.Label(fr_man_post, text="Posterize:", width=8).pack(side=tk.LEFT)
+        c['manual_posterize'] = tk.IntVar(value=0)
+        ttk.Scale(fr_man_post, from_=0, to=254, variable=c['manual_posterize'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'manual_posterize', int(float(v)))).pack(side=tk.LEFT)
+        c['manual_posterize_lbl'] = ttk.Label(fr_man_post, text="0", width=6)
+        c['manual_posterize_lbl'].pack(side=tk.LEFT, padx=5)
+        c['manual_posterize'].trace_add('write', lambda *args: c['manual_posterize_lbl'].config(text=f"{c['manual_posterize'].get()}"))
+
+        fr_man_invert = ttk.Frame(tab_man)
+        fr_man_invert.pack(fill=tk.X, pady=5)
+        c['manual_invert'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fr_man_invert, text="Invert Colors", variable=c['manual_invert'],
+                       command=lambda: setattr(ch, 'manual_invert', c['manual_invert'].get())).pack(side=tk.LEFT, padx=5)
+        
         return c
     
     def setup_mod_simple(self, parent, mod, label):
@@ -3569,6 +3652,16 @@ class VideoMixer:
                 c[f'{effect_name}_lfo_en'].set(mod_obj.enabled)
                 c[f'{effect_name}_wave'].set(mod_obj.wave_type)
                 c[f'{effect_name}_rate'].set(Modulator.RATE_REVERSE.get(mod_obj.rate, "1"))
+        
+        # Update MAN tab controls
+        if 'manual_blur' in c:
+            c['manual_blur'].set(ch.manual_blur)
+        if 'manual_zoom' in c:
+            c['manual_zoom'].set(ch.manual_zoom)
+        if 'manual_posterize' in c:
+            c['manual_posterize'].set(ch.manual_posterize)
+        if 'manual_invert' in c:
+            c['manual_invert'].set(ch.manual_invert)
     
     def update_mod_ui(self, c, m):
         c['en'].set(m.enabled)
