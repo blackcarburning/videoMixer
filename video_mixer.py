@@ -1633,63 +1633,59 @@ class VideoChannel:
 
         # Camera Shake (driven by random values)
         if self.shake_amount > 0:
+            frame = frame.copy()  # Copy frame once for all shake transformations
             h, w = frame.shape[:2]
             
             # Generate random values for each component using different seeds
+            # Different cycle multipliers (17.3, 23.7, 31.1, 13.9, 19.7) create varied, 
+            # independent shake patterns for each component
             cycle_h = int(beat_pos * 17.3)
             cycle_v = int(beat_pos * 23.7)
             cycle_t = int(beat_pos * 31.1)
             cycle_z = int(beat_pos * 13.9)
             cycle_b = int(beat_pos * 19.7)
             
+            # Generate all random values in a single block for performance
+            np.random.seed(cycle_h % 10000)
+            rand_h = np.random.uniform(-1.0, 1.0) if self.shake_horizontal > 0 else 0
+            np.random.seed(cycle_v % 10000)
+            rand_v = np.random.uniform(-1.0, 1.0) if self.shake_vertical > 0 else 0
+            np.random.seed(cycle_t % 10000)
+            rand_t = np.random.uniform(-1.0, 1.0) if self.shake_tilt > 0 else 0
+            np.random.seed(cycle_z % 10000)
+            rand_z = np.random.uniform(-1.0, 1.0) if self.shake_zoom > 0 else 0
+            np.random.seed(cycle_b % 10000)
+            rand_b = abs(np.random.uniform(-1.0, 1.0)) if self.shake_blur > 0 else 0
+            np.random.seed(None)
+            
             # Horizontal shake
-            if self.shake_horizontal > 0:
-                np.random.seed(cycle_h % 10000)
-                offset_x = int(np.random.uniform(-1.0, 1.0) * self.shake_amount * self.shake_horizontal * 50)
-                np.random.seed(None)
-            else:
-                offset_x = 0
+            offset_x = int(rand_h * self.shake_amount * self.shake_horizontal * 50) if self.shake_horizontal > 0 else 0
             
             # Vertical shake
-            if self.shake_vertical > 0:
-                np.random.seed(cycle_v % 10000)
-                offset_y = int(np.random.uniform(-1.0, 1.0) * self.shake_amount * self.shake_vertical * 50)
-                np.random.seed(None)
-            else:
-                offset_y = 0
+            offset_y = int(rand_v * self.shake_amount * self.shake_vertical * 50) if self.shake_vertical > 0 else 0
             
             # Apply translation if needed
             if offset_x != 0 or offset_y != 0:
-                frame = frame.copy()
                 M_translate = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
                 frame = cv2.warpAffine(frame, M_translate, (w, h))
             
             # Tilt (rotation) shake
             if self.shake_tilt > 0:
-                frame = frame.copy()
-                np.random.seed(cycle_t % 10000)
-                angle = np.random.uniform(-1.0, 1.0) * self.shake_amount * self.shake_tilt * 15  # Max 15 degrees
-                np.random.seed(None)
+                angle = rand_t * self.shake_amount * self.shake_tilt * 15  # Max 15 degrees
                 M_rotate = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
                 frame = cv2.warpAffine(frame, M_rotate, (w, h))
             
             # Zoom shake
             if self.shake_zoom > 0:
-                frame = frame.copy()
-                np.random.seed(cycle_z % 10000)
-                scale = 1.0 + np.random.uniform(-1.0, 1.0) * self.shake_amount * self.shake_zoom * 0.3  # Max 30% zoom variation
-                np.random.seed(None)
+                scale = 1.0 + rand_z * self.shake_amount * self.shake_zoom * 0.3  # Max 30% zoom variation
                 M_zoom = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
                 frame = cv2.warpAffine(frame, M_zoom, (w, h))
             
             # Blur shake
             if self.shake_blur > 0:
-                frame = frame.copy()
-                np.random.seed(cycle_b % 10000)
-                blur_val = abs(np.random.uniform(-1.0, 1.0)) * self.shake_amount * self.shake_blur
-                np.random.seed(None)
+                blur_val = rand_b * self.shake_amount * self.shake_blur
                 if blur_val > 0.01:
-                    k = int(blur_val * 30) * 2 + 1
+                    k = min(int(blur_val * 30) * 2 + 1, 61)  # Limit kernel size to max 61
                     frame = cv2.GaussianBlur(frame, (k, k), 0)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
