@@ -2203,7 +2203,8 @@ class VideoMixer:
         # Preview size settings
         self.preview_max_height = 360  # Default medium size
         
-        self.preview_width = 640
+        # Initialize with default aspect ratio (16:9) and medium size
+        self.preview_width = int(360 * 16 / 9)  # 640
         self.preview_height = 360
         self.channel_a = VideoChannel(self.preview_width, self.preview_height)
         self.channel_b = VideoChannel(self.preview_width, self.preview_height)
@@ -2622,7 +2623,7 @@ class VideoMixer:
     def on_preview_size_change(self):
         """Handle preview size change from the dropdown."""
         size = self.preview_size_var.get()
-        self.preview_max_height = self.PREVIEW_SIZES.get(size, 360)
+        self.preview_max_height = self.PREVIEW_SIZES.get(size, self.PREVIEW_SIZES["Medium"])
         # Re-apply aspect ratio with new size
         self.on_aspect_ratio_change()
     
