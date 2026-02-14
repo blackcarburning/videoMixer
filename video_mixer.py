@@ -231,7 +231,7 @@ class Modulator:
                     "1": 1.0, "2": 2.0, "4": 4.0, "8": 8.0, "16": 16.0, "32": 32.0}
     RATE_REVERSE = {v: k for k, v in RATE_OPTIONS.items()}
     _sin_table = np.sin(np.linspace(0, 2 * np.pi, 4096, dtype=np.float32))
-    WAVE_TYPES = ["sine", "square", "triangle", "saw_forward", "saw_backward", "envelope"]
+    WAVE_TYPES = ["sine", "square", "triangle", "saw_forward", "saw_backward", "envelope", "rand"]
 
     def __init__(self):
         self.wave_type = "sine"
@@ -299,6 +299,14 @@ class Modulator:
                 else:
                     # Silent phase
                     value = -1.0
+            elif self.wave_type == "rand":
+                # Random value that changes each cycle
+                # Use beat position divided by rate to get cycle number
+                cycle = int(beat_position / self.rate)
+                # Use cycle as seed for deterministic randomness within same cycle
+                np.random.seed(cycle % 10000)
+                value = np.random.uniform(-1.0, 1.0)
+                np.random.seed(None)  # Reset seed to restore true randomness elsewhere
             if self.invert: value = -value
             if self.pos_only: value = max(0, value)
             elif self.neg_only: value = min(0, value)
