@@ -3560,7 +3560,8 @@ class VideoMixer:
                     
                     # Cache the last rendered frame in BGR format for FrameRecorder
                     # blended is already in BGR from OpenCV processing
-                    self.last_rendered_frame = blended.copy()
+                    # Convert from float32 (0.0-1.0) to uint8 (0-255) for cv2.VideoWriter
+                    self.last_rendered_frame = (np.clip(blended, 0, 1) * 255).astype(np.uint8)
         except Exception as e:
             print(f"ERROR in update_loop: {e}")
             traceback.print_exc()
