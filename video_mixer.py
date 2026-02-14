@@ -3638,14 +3638,19 @@ class VideoMixer:
         try:
             from moviepy.editor import VideoFileClip, AudioFileClip
             
+            # Update status to show progress
+            self.root.after(0, lambda: self.status.set("Loading video and audio..."))
+            
             # Load video and audio
             video_clip = VideoFileClip(video_path)
             audio_clip = AudioFileClip(audio_path)
             
-            # Trim audio to match video duration or loop if shorter
+            self.root.after(0, lambda: self.status.set("Processing audio..."))
+            
+            # Trim audio to match video duration
             if audio_clip.duration < video_clip.duration:
                 # Audio is shorter, we'll just use what we have
-                audio_clip = audio_clip.subclip(0, min(audio_clip.duration, video_clip.duration))
+                audio_clip = audio_clip.subclip(0, audio_clip.duration)
             else:
                 # Audio is longer or same, trim to video length
                 audio_clip = audio_clip.subclip(0, video_clip.duration)
@@ -3656,6 +3661,8 @@ class VideoMixer:
             # Create output path (replace .avi with _with_audio.mp4)
             base_path = os.path.splitext(video_path)[0]
             output_with_audio = f"{base_path}_with_audio.mp4"
+            
+            self.root.after(0, lambda: self.status.set("Writing final video with audio..."))
             
             # Write the final video with audio
             final_clip.write_videofile(output_with_audio, codec='libx264', audio_codec='aac', 
@@ -3669,7 +3676,8 @@ class VideoMixer:
             # Delete the original video without audio
             try:
                 os.remove(video_path)
-            except:
+            except (OSError, PermissionError):
+                # If we can't delete the original, that's okay - user has both files
                 pass
             
             self.root.after(0, lambda: self.status.set(f"Recording saved: {os.path.basename(output_with_audio)}"))
@@ -3678,10 +3686,12 @@ class VideoMixer:
             
         except Exception as e:
             # If muxing fails, still keep the video without audio
+            import sys
+            print(f"Audio muxing error: {e}", file=sys.stderr)
             self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
             self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
                                                               f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed: {str(e)}"))
-            print(f"Audio muxing error: {e}")
+
             
     def save_preset(self):
         p = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
