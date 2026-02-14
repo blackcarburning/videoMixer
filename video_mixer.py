@@ -893,7 +893,7 @@ class VideoChannel:
         self.resized_cache[frame_idx] = resized
         return resized
     
-    def _apply_mirror(self, frame, beat_pos):
+    def _apply_mirror(self, frame, beat_pos, bpm, env_attack, env_release):
         if self.mirror_mode == "Off":
             return frame
         
@@ -938,7 +938,8 @@ class VideoChannel:
         return frame
     
     def _get_dis_amount(self, mode, base_amount, modulator, beat_pos, 
-                        trigger_enabled=False, trigger_beat=0.0, trigger_duration=1.0, mixer=None):
+                        trigger_enabled=False, trigger_beat=0.0, trigger_duration=1.0, mixer=None,
+                        bpm=120.0, env_attack=0.1, env_release=0.5):
         """Get disintegration amount based on mode"""
         
         # Trigger mode - only works when global loop is enabled
@@ -1346,7 +1347,7 @@ class VideoChannel:
                 M_b = np.float32([[1, 0, -offset], [0, 1, -offset]])
                 frame[:, :, 0] = cv2.warpAffine(frame[:, :, 0], M_b, (w, h), borderMode=cv2.BORDER_WRAP)
 
-        frame = self._apply_mirror(frame, beat_pos)
+        frame = self._apply_mirror(frame, beat_pos, bpm, env_attack, env_release)
 
         # Apply mosh modulator to mosh_amount
         effective_mosh = self.mosh_amount
@@ -1503,7 +1504,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_particle_mode, self.dis_particle_amount, self.dis_particle_mod, beat_pos,
                 self.dis_particle_trigger_enabled, self.dis_particle_trigger_beat, 
-                self.dis_particle_trigger_duration, mixer
+                self.dis_particle_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_particle_dissolve(frame, amt, beat_pos)
         
@@ -1511,7 +1513,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_thanos_mode, self.dis_thanos_amount, self.dis_thanos_mod, beat_pos,
                 self.dis_thanos_trigger_enabled, self.dis_thanos_trigger_beat, 
-                self.dis_thanos_trigger_duration, mixer
+                self.dis_thanos_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_thanos_snap(frame, amt, beat_pos)
         
@@ -1519,7 +1522,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_glitch_mode, self.dis_glitch_amount, self.dis_glitch_mod, beat_pos,
                 self.dis_glitch_trigger_enabled, self.dis_glitch_trigger_beat, 
-                self.dis_glitch_trigger_duration, mixer
+                self.dis_glitch_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_glitch_dissolve(frame, amt, beat_pos)
         
@@ -1527,7 +1531,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_scatter_mode, self.dis_scatter_amount, self.dis_scatter_mod, beat_pos,
                 self.dis_scatter_trigger_enabled, self.dis_scatter_trigger_beat, 
-                self.dis_scatter_trigger_duration, mixer
+                self.dis_scatter_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_pixel_scatter(frame, amt, beat_pos)
         
@@ -1535,7 +1540,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_ember_mode, self.dis_ember_amount, self.dis_ember_mod, beat_pos,
                 self.dis_ember_trigger_enabled, self.dis_ember_trigger_beat, 
-                self.dis_ember_trigger_duration, mixer
+                self.dis_ember_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_ash_ember(frame, amt, beat_pos)
         
@@ -1543,7 +1549,8 @@ class VideoChannel:
             amt = self._get_dis_amount(
                 self.dis_rain_mode, self.dis_rain_amount, self.dis_rain_mod, beat_pos,
                 self.dis_rain_trigger_enabled, self.dis_rain_trigger_beat, 
-                self.dis_rain_trigger_duration, mixer
+                self.dis_rain_trigger_duration, mixer,
+                bpm, env_attack, env_release
             )
             frame = self._apply_digital_rain(frame, amt, beat_pos)
 
