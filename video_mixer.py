@@ -3601,14 +3601,21 @@ class VideoMixer:
             return
         
         try:
+            print("=== Stop Recording Debug ===")
             self.recording = False
             
             if self.recording_thread:
+                print("Stopping recording thread...")
                 self.recording_thread.stop_recording()
                 # Wait for thread to finish writing (with timeout)
                 self.recording_thread.join(timeout=5.0)
                 
                 output_path = self.recording_thread.output_path
+                print(f"Video file path: {output_path}")
+                print(f"Video file exists: {os.path.exists(output_path)}")
+                if os.path.exists(output_path):
+                    print(f"Video file size: {os.path.getsize(output_path)} bytes")
+                
                 self.recording_thread = None
                 
                 self.record_btn.config(text="● Record", bg="lightgray")
@@ -3619,17 +3626,27 @@ class VideoMixer:
                 self.metronome.enabled = self.metronome_state_before_recording
                 
                 # Add audio to video if audio is loaded
+                print(f"Audio track path: {self.audio_track.path}")
+                print(f"Audio track enabled: {self.audio_track.enabled}")
+                
                 if self.audio_track.path and os.path.exists(self.audio_track.path):
+                    print("Starting audio muxing thread...")
                     self.status.set("Adding audio to recording...")
                     threading.Thread(target=self.mux_audio_to_video, 
                                    args=(output_path, self.audio_track.path), 
                                    daemon=True).start()
                 else:
                     # No audio to add
+                    print("No audio track available, saving video without audio")
+                    print("=== End Stop Recording Debug ===")
                     self.status.set(f"Recording saved: {os.path.basename(output_path)}")
-                    messagebox.showinfo("Recording Complete", f"Saved to:\n{output_path}")
+                    messagebox.showinfo("Recording Complete", f"Video saved to:\n{output_path}")
             
         except Exception as e:
+            print(f"Error stopping recording: {e}")
+            import traceback
+            traceback.print_exc()
+            print("=== End Stop Recording Debug ===")
             messagebox.showerror("Recording Error", f"Error stopping recording: {str(e)}")
             self.record_btn.config(text="● Record", bg="lightgray")
             self.recording_indicator.config(bg="gray")
@@ -3638,63 +3655,114 @@ class VideoMixer:
             self.metronome.enabled = self.metronome_state_before_recording
     
     def mux_audio_to_video(self, video_path, audio_path):
-        """Add audio track to the recorded video using moviepy."""
+        """Add audio track to the recorded video using ffmpeg."""
+        import subprocess
+        import sys
+        
         try:
-            from moviepy.editor import VideoFileClip, AudioFileClip
+            # Debug logging
+            print(f"=== Audio Muxing Debug ===")
+            print(f"Audio track path: {audio_path}")
+            print(f"Video temp path: {video_path}")
+            print(f"Audio file exists: {os.path.exists(audio_path)}")
+            print(f"Video file exists: {os.path.exists(video_path)}")
+            
+            # Check if audio file exists
+            if not audio_path or not os.path.exists(audio_path):
+                print(f"Audio file not found: {audio_path}")
+                self.root.after(0, lambda: self.status.set(f"Recording saved (no audio): {os.path.basename(video_path)}"))
+                self.root.after(0, lambda: messagebox.showinfo("Recording Complete", 
+                                                               f"Saved video without audio to:\n{video_path}"))
+                return
+            
+            # Check if video file exists
+            if not os.path.exists(video_path):
+                print(f"Video file not found: {video_path}")
+                self.root.after(0, lambda: messagebox.showerror("Recording Error", 
+                                                                f"Video file not found: {video_path}"))
+                return
             
             # Update status to show progress
-            self.root.after(0, lambda: self.status.set("Loading video and audio..."))
-            
-            # Load video and audio
-            video_clip = VideoFileClip(video_path)
-            audio_clip = AudioFileClip(audio_path)
-            
-            self.root.after(0, lambda: self.status.set("Processing audio..."))
-            
-            # Trim audio to match video duration
-            if audio_clip.duration < video_clip.duration:
-                # Audio is shorter, we'll just use what we have
-                audio_clip = audio_clip.subclip(0, audio_clip.duration)
-            else:
-                # Audio is longer or same, trim to video length
-                audio_clip = audio_clip.subclip(0, video_clip.duration)
-            
-            # Set audio to video
-            final_clip = video_clip.set_audio(audio_clip)
+            self.root.after(0, lambda: self.status.set("Adding audio to recording..."))
             
             # Create output path (replace .avi with _with_audio.mp4)
             base_path = os.path.splitext(video_path)[0]
             output_with_audio = f"{base_path}_with_audio.mp4"
             
-            self.root.after(0, lambda: self.status.set("Writing final video with audio..."))
+            print(f"Final output path: {output_with_audio}")
+            print(f"Starting audio mux with ffmpeg...")
             
-            # Write the final video with audio
-            final_clip.write_videofile(output_with_audio, codec='libx264', audio_codec='aac', 
-                                      fps=self.recording_fps, logger=None)
+            # Build ffmpeg command
+            cmd = [
+                'ffmpeg', '-y',  # Overwrite output file if it exists
+                '-i', video_path,  # Input video
+                '-i', audio_path,  # Input audio
+                '-c:v', 'copy',  # Copy video codec (no re-encoding)
+                '-c:a', 'aac',  # Use AAC audio codec
+                '-b:a', '192k',  # Audio bitrate
+                '-shortest',  # Match shortest stream (video or audio)
+                output_with_audio
+            ]
             
-            # Close clips
-            video_clip.close()
-            audio_clip.close()
-            final_clip.close()
+            # Run ffmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            # Delete the original video without audio
+            if result.returncode != 0:
+                print(f"FFmpeg error (return code {result.returncode}):")
+                print(f"STDERR: {result.stderr}")
+                self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
+                self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
+                                                                  f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed. Check console for details."))
+                return
+            
+            # Verify output file exists and has size > 0
+            if not os.path.exists(output_with_audio):
+                print(f"Output file was not created: {output_with_audio}")
+                self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
+                self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
+                                                                  f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed: output file not created."))
+                return
+            
+            output_size = os.path.getsize(output_with_audio)
+            print(f"Mux complete. File exists: {os.path.exists(output_with_audio)}")
+            print(f"File size: {output_size} bytes")
+            
+            if output_size == 0:
+                print(f"Output file is empty!")
+                self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
+                self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
+                                                                  f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed: output file is empty."))
+                return
+            
+            # Success! Delete the original video without audio
             try:
                 os.remove(video_path)
-            except (OSError, PermissionError):
+                print(f"Deleted temporary video file: {video_path}")
+            except (OSError, PermissionError) as e:
                 # If we can't delete the original, that's okay - user has both files
-                pass
+                print(f"Could not delete temporary video: {e}")
             
+            print(f"Audio muxing successful!")
+            print(f"=== End Audio Muxing Debug ===")
+            
+            # Show success message
             self.root.after(0, lambda: self.status.set(f"Recording saved: {os.path.basename(output_with_audio)}"))
             self.root.after(0, lambda: messagebox.showinfo("Recording Complete", 
-                                                           f"Saved with audio to:\n{output_with_audio}"))
+                                                           f"Video saved to:\n{output_with_audio}"))
             
+        except FileNotFoundError:
+            print("FFmpeg not found. Please install ffmpeg.")
+            self.root.after(0, lambda: self.status.set(f"Recording saved (FFmpeg not found): {os.path.basename(video_path)}"))
+            self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
+                                                              f"Saved video without audio to:\n{video_path}\n\nFFmpeg not found. Please install ffmpeg to add audio."))
         except Exception as e:
             # If muxing fails, still keep the video without audio
-            import sys
             print(f"Audio muxing error: {e}", file=sys.stderr)
-            self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing failed): {os.path.basename(video_path)}"))
+            import traceback
+            traceback.print_exc()
+            self.root.after(0, lambda: self.status.set(f"Recording saved (audio muxing error): {os.path.basename(video_path)}"))
             self.root.after(0, lambda: messagebox.showwarning("Recording Complete", 
-                                                              f"Saved video without audio to:\n{video_path}\n\nAudio muxing failed: {str(e)}"))
+                                                              f"Saved video without audio to:\n{video_path}\n\nAudio muxing error: {str(e)}"))
 
             
     def save_preset(self):
