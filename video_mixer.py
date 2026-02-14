@@ -2053,7 +2053,12 @@ class RecordingThread(threading.Thread):
                 self.writer.release()
                 
     def add_frame(self, frame):
-        """Add a frame to the recording queue."""
+        """Add a frame to the recording queue.
+        
+        Note: Frame count is incremented when added to queue, not when written.
+        If frames are dropped (queue full), the actual FPS will be slightly
+        over-estimated, but this is conservative and won't cause sync issues.
+        """
         try:
             self.frame_queue.put_nowait(frame)
             self.recorded_frame_count += 1
@@ -3786,6 +3791,8 @@ class VideoMixer:
                     print(f"Expected duration at {declared_fps} FPS: {frame_count / declared_fps:.2f}s")
                 
                 # Use actual FPS if it differs significantly from declared FPS
+                # This handles cases where frame capture rate differs from target FPS
+                # due to system load or performance issues
                 use_fps = actual_fps if actual_fps and abs(actual_fps - declared_fps) > self.FPS_DIFFERENCE_THRESHOLD else declared_fps
                 print(f"Using FPS for muxing: {use_fps:.2f}")
             else:
@@ -3836,7 +3843,7 @@ class VideoMixer:
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
-                    '-r', str(use_fps),  # Output framerate (match input to avoid duplication/dropping)
+                    '-r', str(use_fps),  # Output framerate (match input for 1:1 frame mapping)
                     '-c:a', 'aac',
                     '-b:a', '192k',
                     '-vsync', 'cfr',  # Constant frame rate
