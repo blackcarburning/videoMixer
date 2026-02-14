@@ -246,6 +246,7 @@ class Modulator:
         self.fine_tune = 0.0
         
     def get_value(self, beat_position, bpm=120.0, env_attack=0.1, env_release=0.5):
+        # Note: env_attack and env_release defaults should match VideoMixer.__init__ values
         if not self.enabled or self.depth == 0:
             return 0.0
         cp = ((beat_position / self.rate) + self.phase) % 1.0
@@ -267,8 +268,12 @@ class Modulator:
             cycle_duration = self.rate * beat_duration  # seconds per cycle
             
             # Calculate attack and release as fractions of the cycle
-            attack_fraction = min(env_attack / cycle_duration, 1.0) if cycle_duration > 0 else 0.0
-            release_fraction = min(env_release / cycle_duration, 1.0) if cycle_duration > 0 else 0.0
+            if cycle_duration > 0:
+                attack_fraction = min(env_attack / cycle_duration, 1.0)
+                release_fraction = min(env_release / cycle_duration, 1.0)
+            else:
+                attack_fraction = 0.0
+                release_fraction = 0.0
             
             # Ensure attack + release doesn't exceed 1.0
             total = attack_fraction + release_fraction
