@@ -1321,6 +1321,7 @@ class VideoChannel:
                 lfo_output = self.blur_mod.get_value(beat_pos, bpm, env_attack, env_release)
                 bval = (lfo_output + self.blur_mod.depth) / 2.0  # Maps 0 to depth
                 if bval > 0.05:
+                    frame = frame.copy()  # Copy before modifying to avoid corrupting cache
                     k = int(bval * 30) * 2 + 1 
                     frame = cv2.GaussianBlur(frame, (k, k), 0)
             except Exception as e:
