@@ -2013,6 +2013,10 @@ class RecordingThread(threading.Thread):
         self.running = False
         self.frame_queue = queue.Queue(maxsize=60)  # Buffer up to 60 frames
         self.writer = None
+        # Track actual recording metrics
+        self.recording_start_time = None
+        self.recording_end_time = None
+        self.recorded_frame_count = 0
         
     def run(self):
         """Run the recording thread at high priority."""
@@ -2023,6 +2027,10 @@ class RecordingThread(threading.Thread):
         except (AttributeError, ImportError, OSError):
             # Windows-specific priority setting not available on this platform
             pass
+        
+        # Mark start time
+        import time
+        self.recording_start_time = time.perf_counter()
         
         try:
             self.writer = cv2.VideoWriter(self.output_path, self.fourcc, self.fps, self.size)
@@ -2040,6 +2048,8 @@ class RecordingThread(threading.Thread):
                 except Exception as e:
                     print(f"Error writing frame: {e}")
         finally:
+            # Mark end time
+            self.recording_end_time = time.perf_counter()
             if self.writer:
                 self.writer.release()
                 
@@ -2047,6 +2057,7 @@ class RecordingThread(threading.Thread):
         """Add a frame to the recording queue."""
         try:
             self.frame_queue.put_nowait(frame)
+            self.recorded_frame_count += 1
             return True
         except queue.Full:
             print("Warning: Recording frame dropped (queue full)")
@@ -3661,10 +3672,38 @@ class VideoMixer:
                 self.recording_thread.join(timeout=5.0)
                 
                 output_path = self.recording_thread.output_path
+                
+                # Get recording metrics
+                recorded_frame_count = self.recording_thread.recorded_frame_count
+                recording_start_time = self.recording_thread.recording_start_time
+                recording_end_time = self.recording_thread.recording_end_time
+                declared_fps = self.recording_thread.fps
+                
+                # Calculate actual recording duration and FPS
+                if recording_start_time and recording_end_time:
+                    actual_duration = recording_end_time - recording_start_time
+                    actual_fps = recorded_frame_count / actual_duration if actual_duration > 0 else declared_fps
+                    
+                    print(f"=== Recording Statistics ===")
+                    print(f"Recorded {recorded_frame_count} frames in {actual_duration:.2f}s")
+                    print(f"Actual FPS: {actual_fps:.2f}, Declared FPS: {declared_fps}")
+                    print(f"Expected duration: {recorded_frame_count / declared_fps:.2f}s")
+                else:
+                    actual_duration = None
+                    actual_fps = declared_fps
+                
                 print(f"Video file path: {output_path}")
                 print(f"Video file exists: {os.path.exists(output_path)}")
                 if os.path.exists(output_path):
                     print(f"Video file size: {os.path.getsize(output_path)} bytes")
+                
+                # Store metrics for muxing
+                recording_metrics = {
+                    'frame_count': recorded_frame_count,
+                    'actual_duration': actual_duration,
+                    'actual_fps': actual_fps,
+                    'declared_fps': declared_fps
+                }
                 
                 self.recording_thread = None
                 
@@ -3683,7 +3722,7 @@ class VideoMixer:
                     print("Starting audio muxing thread...")
                     self.status.set("Adding audio to recording...")
                     threading.Thread(target=self.mux_audio_to_video, 
-                                   args=(output_path, self.audio_track.path), 
+                                   args=(output_path, self.audio_track.path, recording_metrics), 
                                    daemon=True).start()
                 else:
                     # No audio to add - rename temp file to final format
@@ -3715,7 +3754,7 @@ class VideoMixer:
             self.metro_var.set(self.metronome_state_before_recording)
             self.metronome.enabled = self.metronome_state_before_recording
     
-    def mux_audio_to_video(self, video_path, audio_path):
+    def mux_audio_to_video(self, video_path, audio_path, recording_metrics=None):
         """Add audio track to the recorded video using ffmpeg."""
         import subprocess
         import sys
@@ -3727,6 +3766,31 @@ class VideoMixer:
             print(f"Video temp path: {video_path}")
             print(f"Audio file exists: {os.path.exists(audio_path)}")
             print(f"Video file exists: {os.path.exists(video_path)}")
+            
+            # Get recording metrics
+            if recording_metrics:
+                frame_count = recording_metrics.get('frame_count', 0)
+                actual_duration = recording_metrics.get('actual_duration')
+                actual_fps = recording_metrics.get('actual_fps')
+                declared_fps = recording_metrics.get('declared_fps')
+                
+                print(f"=== Recording Metrics ===")
+                print(f"Frame count: {frame_count}")
+                if actual_duration:
+                    print(f"Actual recording duration: {actual_duration:.2f}s")
+                    print(f"Actual FPS: {actual_fps:.2f}")
+                print(f"Declared FPS: {declared_fps}")
+                if actual_duration and declared_fps:
+                    print(f"Expected duration at {declared_fps} FPS: {frame_count / declared_fps:.2f}s")
+                
+                # Use actual FPS if it differs significantly from declared FPS
+                use_fps = actual_fps if actual_fps and abs(actual_fps - declared_fps) > 1 else declared_fps
+                print(f"Using FPS for muxing: {use_fps:.2f}")
+            else:
+                # Fallback to declared FPS if no metrics available
+                declared_fps = int(self.record_fps.get())
+                use_fps = declared_fps
+                print(f"No recording metrics available, using declared FPS: {declared_fps}")
             
             # Get selected output format
             output_format = self.record_format.get()
@@ -3765,34 +3829,41 @@ class VideoMixer:
             if output_format == 'mp4':
                 cmd = [
                     'ffmpeg', '-y',
+                    '-r', str(use_fps),  # Force input framerate
                     '-i', video_path,
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
+                    '-r', str(declared_fps),  # Output framerate
                     '-c:a', 'aac',
                     '-b:a', '192k',
+                    '-vsync', 'cfr',  # Constant frame rate
                     '-shortest',
                     output_with_audio
                 ]
             elif output_format == 'mov':
                 cmd = [
                     'ffmpeg', '-y',
+                    '-r', str(use_fps),  # Force input framerate
                     '-i', video_path,
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream
                     '-c:a', 'aac',
                     '-b:a', '192k',
+                    '-vsync', 'cfr',  # Constant frame rate
                     '-shortest',
                     output_with_audio
                 ]
             else:  # avi
                 cmd = [
                     'ffmpeg', '-y',
+                    '-r', str(use_fps),  # Force input framerate
                     '-i', video_path,
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
                     '-b:a', '192k',
+                    '-vsync', 'cfr',  # Constant frame rate
                     '-shortest',
                     output_with_audio
                 ]
