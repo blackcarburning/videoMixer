@@ -2060,7 +2060,8 @@ class FrameRecorder(threading.Thread):
                 # Schedule next frame at exact interval
                 next_frame_time += self.frame_interval
                 
-                # If we've fallen behind, catch up
+                # If we've fallen behind, reset to current time + interval
+                # This prevents accumulating delay but means we'll drop frames if system can't keep up
                 if next_frame_time < now:
                     next_frame_time = now + self.frame_interval
             else:
@@ -2283,7 +2284,6 @@ class VideoMixer:
         self.countdown_value = 0
         self.countdown_timer_id = None
         self.metronome_state_before_recording = False
-        self.recording_output_path = None
         self.recording_output_path = None
         self.last_rendered_frame = None  # Cache last frame for FrameRecorder
         
@@ -3886,12 +3886,10 @@ class VideoMixer:
                     '-i', video_path,
                     '-itsoffset', '0',  # Ensure audio starts at 0
                     '-i', audio_path,
-                    '-c:v', 'libx264',  # Re-encode for MOV (copy might not work with all codecs)
-                    '-preset', 'fast',
-                    '-r', str(use_fps),  # Output framerate
-                    '-vsync', 'cfr',  # Constant frame rate
+                    '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
                     '-b:a', '192k',
+                    '-vsync', 'cfr',  # Constant frame rate
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
