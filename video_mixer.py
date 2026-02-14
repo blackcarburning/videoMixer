@@ -2233,11 +2233,12 @@ class VideoMixer:
         # Recording state
         self.recording = False
         self.recording_thread = None
-        self.recording_fps = 30  # Default recording FPS
+        self.recording_fps = 30  # Default recording FPS (will be updated by dropdown)
         self.countdown_active = False
         self.countdown_value = 0
         self.countdown_timer_id = None
         self.metronome_state_before_recording = False
+        self.recording_output_path = None
         self.recording_output_path = None
         
         self.setup_ui()
@@ -2460,6 +2461,22 @@ class VideoMixer:
         self.record_btn.pack(side=tk.LEFT, padx=2)
         self.recording_indicator = tk.Canvas(row3, width=20, height=20, bg="gray", highlightthickness=1)
         self.recording_indicator.pack(side=tk.LEFT, padx=3)
+        
+        # Format dropdown
+        ttk.Label(row3, text="Fmt:").pack(side=tk.LEFT, padx=(10, 2))
+        self.record_format = tk.StringVar(value="avi")  # Default to AVI
+        format_combo = ttk.Combobox(row3, textvariable=self.record_format, 
+                                    values=["avi", "mov", "mp4"], 
+                                    state="readonly", width=5)
+        format_combo.pack(side=tk.LEFT, padx=2)
+        
+        # FPS dropdown
+        ttk.Label(row3, text="FPS:").pack(side=tk.LEFT, padx=(5, 2))
+        self.record_fps = tk.StringVar(value="24")  # Default to 24
+        fps_combo = ttk.Combobox(row3, textvariable=self.record_fps,
+                                 values=["24", "25", "30"],
+                                 state="readonly", width=4)
+        fps_combo.pack(side=tk.LEFT, padx=2)
         
         ttk.Label(row3, text="Offset (ms):").pack(side=tk.LEFT, padx=(10, 5))
         self.latency_ms = tk.DoubleVar(value=0.0)
@@ -3555,7 +3572,9 @@ class VideoMixer:
             bpm_value = int(self.bpm)
         except (ValueError, TypeError):
             bpm_value = 120  # Default BPM if conversion fails
-        filename = f"videomixer_recording_{bpm_value}bpm_{timestamp}.avi"
+        fmt = self.record_format.get()
+        # Always record as .avi temp file first, then convert in mux_audio_to_video
+        filename = f"videomixer_recording_{bpm_value}bpm_{timestamp}_temp.avi"
         downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
         if not os.path.exists(downloads_folder):
             os.makedirs(downloads_folder)
@@ -3570,12 +3589,15 @@ class VideoMixer:
     def begin_actual_recording(self):
         """Actually start the recording after countdown."""
         try:
-            # Use MJPG codec for AVI format
+            # Use MJPG codec for AVI format (most reliable)
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
             size = (self.preview_width, self.preview_height)
             
+            # Get FPS from the dropdown selection
+            fps = int(self.record_fps.get())
+            
             # Create and start recording thread
-            self.recording_thread = RecordingThread(self.recording_output_path, fourcc, self.recording_fps, size)
+            self.recording_thread = RecordingThread(self.recording_output_path, fourcc, fps, size)
             self.recording_thread.running = True
             self.recording_thread.start()
             
@@ -3636,11 +3658,22 @@ class VideoMixer:
                                    args=(output_path, self.audio_track.path), 
                                    daemon=True).start()
                 else:
-                    # No audio to add
+                    # No audio to add - rename temp file to final format
                     print("No audio track available, saving video without audio")
-                    print("=== End Stop Recording Debug ===")
-                    self.status.set(f"Recording saved: {os.path.basename(output_path)}")
-                    messagebox.showinfo("Recording Complete", f"Video saved to:\n{output_path}")
+                    output_format = self.record_format.get()
+                    base_path = output_path.replace('_temp.avi', '')
+                    final_path = f"{base_path}.{output_format}"
+                    try:
+                        os.rename(output_path, final_path)
+                        print(f"Renamed {output_path} to {final_path}")
+                        print("=== End Stop Recording Debug ===")
+                        self.status.set(f"Recording saved: {os.path.basename(final_path)}")
+                        messagebox.showinfo("Recording Complete", f"Video saved to:\n{final_path}")
+                    except Exception as e:
+                        print(f"Error renaming file: {e}")
+                        print("=== End Stop Recording Debug ===")
+                        self.status.set(f"Recording saved: {os.path.basename(output_path)}")
+                        messagebox.showinfo("Recording Complete", f"Video saved to:\n{output_path}")
             
         except Exception as e:
             print(f"Error stopping recording: {e}")
@@ -3667,12 +3700,20 @@ class VideoMixer:
             print(f"Audio file exists: {os.path.exists(audio_path)}")
             print(f"Video file exists: {os.path.exists(video_path)}")
             
+            # Get selected output format
+            output_format = self.record_format.get()
+            print(f"Selected output format: {output_format}")
+            
             # Check if audio file exists
             if not audio_path or not os.path.exists(audio_path):
                 print(f"Audio file not found: {audio_path}")
-                self.root.after(0, lambda: self.status.set(f"Recording saved (no audio): {os.path.basename(video_path)}"))
+                # Rename temp file to final format without audio
+                base_path = video_path.replace('_temp.avi', '')
+                final_path = f"{base_path}.{output_format}"
+                os.rename(video_path, final_path)
+                self.root.after(0, lambda: self.status.set(f"Recording saved (no audio): {os.path.basename(final_path)}"))
                 self.root.after(0, lambda: messagebox.showinfo("Recording Complete", 
-                                                               f"Saved video without audio to:\n{video_path}"))
+                                                               f"Saved video without audio to:\n{final_path}"))
                 return
             
             # Check if video file exists
@@ -3685,24 +3726,48 @@ class VideoMixer:
             # Update status to show progress
             self.root.after(0, lambda: self.status.set("Adding audio to recording..."))
             
-            # Create output path (replace .avi with _with_audio.mp4)
-            base_path = os.path.splitext(video_path)[0]
-            output_with_audio = f"{base_path}_with_audio.mp4"
+            # Create output path based on selected format (remove _temp suffix)
+            base_path = video_path.replace('_temp.avi', '')
+            output_with_audio = f"{base_path}.{output_format}"
             
             print(f"Final output path: {output_with_audio}")
             print(f"Starting audio mux with ffmpeg...")
             
-            # Build ffmpeg command
-            cmd = [
-                'ffmpeg', '-y',  # Overwrite output file if it exists
-                '-i', video_path,  # Input video
-                '-i', audio_path,  # Input audio
-                '-c:v', 'copy',  # Copy video codec (no re-encoding)
-                '-c:a', 'aac',  # Use AAC audio codec
-                '-b:a', '192k',  # Audio bitrate
-                '-shortest',  # Match shortest stream (video or audio)
-                output_with_audio
-            ]
+            # Build ffmpeg command based on output format
+            if output_format == 'mp4':
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', video_path,
+                    '-i', audio_path,
+                    '-c:v', 'libx264',  # Re-encode to H.264 for MP4
+                    '-preset', 'fast',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-shortest',
+                    output_with_audio
+                ]
+            elif output_format == 'mov':
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', video_path,
+                    '-i', audio_path,
+                    '-c:v', 'copy',  # Copy video stream
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-shortest',
+                    output_with_audio
+                ]
+            else:  # avi
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', video_path,
+                    '-i', audio_path,
+                    '-c:v', 'copy',
+                    '-c:a', 'mp3',  # Use mp3 for AVI
+                    '-b:a', '192k',
+                    '-shortest',
+                    output_with_audio
+                ]
             
             # Run ffmpeg
             result = subprocess.run(cmd, capture_output=True, text=True)
