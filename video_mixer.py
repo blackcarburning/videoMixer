@@ -2300,7 +2300,7 @@ class VideoMixer:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("BPM Video Mixer v15 Fixed")
+        self.root.title("Mesh Video Mixer")
         self.root.geometry("1400x950")
         try:
             import ctypes
@@ -2496,7 +2496,171 @@ class VideoMixer:
         
         self.status.set("Parameters Reset (Videos Kept)")
 
+    def setup_dark_theme(self):
+        """Configure a modern dark theme for the entire application."""
+        style = ttk.Style()
+        
+        # Set the theme base
+        style.theme_use('clam')
+        
+        # Define color palette
+        bg_dark = '#1a1a1a'      # Darkest background
+        bg_medium = '#2d2d2d'    # Medium dark background
+        bg_light = '#3d3d3d'     # Lighter background for raised elements
+        fg_bright = '#ffffff'    # Bright text
+        fg_normal = '#e0e0e0'    # Normal text
+        fg_dim = '#b0b0b0'       # Dim text
+        accent = '#00bcd4'       # Cyan accent color
+        accent_hover = '#00acc1' # Slightly darker cyan
+        border_dark = '#0f0f0f'  # Dark border for depth
+        border_light = '#555555' # Light border for highlights
+        
+        # Configure root window
+        self.root.configure(bg=bg_dark)
+        
+        # TFrame - base frame styling
+        style.configure('TFrame',
+                       background=bg_dark,
+                       borderwidth=0)
+        
+        # TLabelframe - frames with labels
+        style.configure('TLabelframe',
+                       background=bg_medium,
+                       bordercolor=border_light,
+                       borderwidth=1,
+                       relief='solid',
+                       lightcolor=border_light,
+                       darkcolor=border_dark)
+        style.configure('TLabelframe.Label',
+                       background=bg_medium,
+                       foreground=accent,
+                       font=('Arial', 10, 'bold'))
+        
+        # TLabel - text labels
+        style.configure('TLabel',
+                       background=bg_dark,
+                       foreground=fg_normal,
+                       font=('Arial', 9))
+        
+        # TButton - modern button styling with depth
+        style.configure('TButton',
+                       background=bg_light,
+                       foreground=fg_bright,
+                       borderwidth=1,
+                       relief='raised',
+                       bordercolor=border_light,
+                       lightcolor=border_light,
+                       darkcolor=border_dark,
+                       padding=(10, 5),
+                       font=('Arial', 9, 'bold'))
+        style.map('TButton',
+                 background=[('active', accent), ('pressed', accent_hover)],
+                 foreground=[('active', fg_bright), ('pressed', fg_bright)],
+                 relief=[('pressed', 'sunken')])
+        
+        # TCheckbutton - modern toggle appearance
+        style.configure('TCheckbutton',
+                       background=bg_dark,
+                       foreground=fg_normal,
+                       indicatorcolor=bg_light,
+                       indicatorrelief='flat',
+                       borderwidth=1,
+                       font=('Arial', 9))
+        style.map('TCheckbutton',
+                 background=[('active', bg_dark)],
+                 foreground=[('active', accent)],
+                 indicatorcolor=[('selected', accent), ('active', accent_hover)])
+        
+        # TRadiobutton - similar to checkbutton
+        style.configure('TRadiobutton',
+                       background=bg_dark,
+                       foreground=fg_normal,
+                       indicatorcolor=bg_light,
+                       font=('Arial', 9))
+        style.map('TRadiobutton',
+                 foreground=[('active', accent)],
+                 indicatorcolor=[('selected', accent)])
+        
+        # TCombobox - dropdown styling
+        style.configure('TCombobox',
+                       fieldbackground=bg_light,
+                       background=bg_light,
+                       foreground=fg_bright,
+                       arrowcolor=fg_bright,
+                       bordercolor=border_light,
+                       lightcolor=border_light,
+                       darkcolor=border_dark,
+                       selectbackground=accent,
+                       selectforeground=fg_bright)
+        style.map('TCombobox',
+                 fieldbackground=[('readonly', bg_light)],
+                 selectbackground=[('readonly', accent)],
+                 foreground=[('readonly', fg_bright)])
+        
+        # TSpinbox - similar to combobox
+        style.configure('TSpinbox',
+                       fieldbackground=bg_light,
+                       background=bg_light,
+                       foreground=fg_bright,
+                       arrowcolor=fg_bright,
+                       bordercolor=border_light,
+                       lightcolor=border_light,
+                       darkcolor=border_dark,
+                       selectbackground=accent,
+                       selectforeground=fg_bright,
+                       insertcolor=fg_bright)
+        
+        # TScale - slider styling with custom colors
+        style.configure('TScale',
+                       background=bg_dark,
+                       troughcolor=bg_light,
+                       bordercolor=border_dark,
+                       lightcolor=border_light,
+                       darkcolor=border_dark,
+                       sliderthickness=20,
+                       sliderrelief='raised')
+        style.map('TScale',
+                 background=[('active', accent)])
+        
+        # Horizontal.TScale - specific horizontal slider styling
+        style.configure('Horizontal.TScale',
+                       background=bg_dark,
+                       troughcolor=bg_light,
+                       bordercolor=border_dark,
+                       sliderlength=30,
+                       sliderrelief='raised')
+        
+        # TScrollbar - scrollbar styling
+        style.configure('TScrollbar',
+                       background=bg_light,
+                       troughcolor=bg_dark,
+                       bordercolor=border_dark,
+                       arrowcolor=fg_bright,
+                       relief='flat')
+        style.map('TScrollbar',
+                 background=[('active', accent)])
+        
+        # TNotebook - tabbed interface styling
+        style.configure('TNotebook',
+                       background=bg_dark,
+                       bordercolor=border_light,
+                       tabmargins=[2, 5, 2, 0])
+        style.configure('TNotebook.Tab',
+                       background=bg_medium,
+                       foreground=fg_dim,
+                       bordercolor=border_dark,
+                       lightcolor=border_light,
+                       padding=[10, 4],
+                       font=('Arial', 9, 'bold'))
+        style.map('TNotebook.Tab',
+                 background=[('selected', bg_light), ('active', bg_light)],
+                 foreground=[('selected', accent), ('active', fg_bright)],
+                 expand=[('selected', [1, 1, 1, 0])])
+
     def setup_ui(self):
+        # Apply dark theme first
+        self.setup_dark_theme()
+        
         main = ttk.Frame(self.root, padding="5")
         main.pack(fill=tk.BOTH, expand=True)
         top = ttk.Frame(main)
@@ -2580,17 +2744,29 @@ class VideoMixer:
         # Row 3
         row3 = ttk.Frame(tf)
         row3.pack(fill=tk.X, pady=5)
-        self.play_btn = tk.Button(row3, text="Play", command=self.toggle_play, font=("Arial", 11), width=8)
+        self.play_btn = tk.Button(row3, text="Play", command=self.toggle_play, font=("Arial", 11, "bold"), width=8,
+                                  bg='#3d3d3d', fg='#ffffff', activebackground='#00bcd4', activeforeground='#ffffff',
+                                  relief='raised', borderwidth=1, highlightthickness=0)
         self.play_btn.pack(side=tk.LEFT, padx=2)
-        tk.Button(row3, text="Stop", command=self.stop, font=("Arial", 11), width=8).pack(side=tk.LEFT, padx=2)
-        tk.Button(row3, text="Rew", command=self.rewind, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
-        tk.Button(row3, text="Reset", command=self.reset_all, font=("Arial", 11), width=6).pack(side=tk.LEFT, padx=2)
-        tk.Button(row3, text="Param Reset", command=self.reset_parameters, font=("Arial", 11), width=10).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Stop", command=self.stop, font=("Arial", 11, "bold"), width=8,
+                 bg='#3d3d3d', fg='#ffffff', activebackground='#00bcd4', activeforeground='#ffffff',
+                 relief='raised', borderwidth=1, highlightthickness=0).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Rew", command=self.rewind, font=("Arial", 11, "bold"), width=6,
+                 bg='#3d3d3d', fg='#ffffff', activebackground='#00bcd4', activeforeground='#ffffff',
+                 relief='raised', borderwidth=1, highlightthickness=0).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Reset", command=self.reset_all, font=("Arial", 11, "bold"), width=6,
+                 bg='#3d3d3d', fg='#ffffff', activebackground='#00bcd4', activeforeground='#ffffff',
+                 relief='raised', borderwidth=1, highlightthickness=0).pack(side=tk.LEFT, padx=2)
+        tk.Button(row3, text="Param Reset", command=self.reset_parameters, font=("Arial", 11, "bold"), width=10,
+                 bg='#3d3d3d', fg='#ffffff', activebackground='#00bcd4', activeforeground='#ffffff',
+                 relief='raised', borderwidth=1, highlightthickness=0).pack(side=tk.LEFT, padx=2)
         
         # Recording button and indicator
-        self.record_btn = tk.Button(row3, text="● Record", command=self.toggle_recording, font=("Arial", 11), width=10, bg="lightgray")
+        self.record_btn = tk.Button(row3, text="● Record", command=self.toggle_recording, font=("Arial", 11, "bold"), width=10,
+                                   bg='#2d2d2d', fg='#e0e0e0', activebackground='#ff5252', activeforeground='#ffffff',
+                                   relief='raised', borderwidth=1, highlightthickness=0)
         self.record_btn.pack(side=tk.LEFT, padx=2)
-        self.recording_indicator = tk.Canvas(row3, width=20, height=20, bg="gray", highlightthickness=1)
+        self.recording_indicator = tk.Canvas(row3, width=20, height=20, bg="#2d2d2d", highlightthickness=1, highlightbackground='#555555')
         self.recording_indicator.pack(side=tk.LEFT, padx=3)
         
         # Format dropdown
@@ -2664,7 +2840,9 @@ class VideoMixer:
         ttk.Button(row6, text="Save Proj", command=self.save_project).pack(side=tk.LEFT, padx=2)
         ttk.Button(row6, text="Load Preset", command=self.load_preset).pack(side=tk.LEFT, padx=2)
         ttk.Button(row6, text="Save Preset", command=self.save_preset).pack(side=tk.LEFT, padx=2)
-        tk.Button(row6, text="Export", command=self.export_video, font=("Arial", 10)).pack(side=tk.LEFT, padx=10)
+        tk.Button(row6, text="Export", command=self.export_video, font=("Arial", 10, "bold"),
+                 bg='#4caf50', fg='#ffffff', activebackground='#66bb6a', activeforeground='#ffffff',
+                 relief='raised', borderwidth=1, highlightthickness=0).pack(side=tk.LEFT, padx=10)
         
         # Timeline Widget
         timeline_frame = ttk.LabelFrame(main, text="Timeline", padding="5")
@@ -3684,7 +3862,7 @@ class VideoMixer:
             self.countdown_timer_id = None
         self.countdown_active = False
         self.countdown_var.set("")
-        self.record_btn.config(text="● Record", bg="lightgray")
+        self.record_btn.config(text="● Record", bg="#2d2d2d")
         self.status.set("Recording cancelled")
         
         # Restore metronome state if it was changed
@@ -3766,7 +3944,7 @@ class VideoMixer:
         # Start countdown
         self.countdown_active = True
         self.countdown_value = 3
-        self.record_btn.config(text="⬛ Cancel", bg="orange")
+        self.record_btn.config(text="⬛ Cancel", bg="#ff9800")
         self.countdown_tick()
     
     def begin_actual_recording(self):
@@ -3786,8 +3964,8 @@ class VideoMixer:
             self.recording_thread.start()
             
             self.recording = True
-            self.record_btn.config(text="⬛ Stop Rec", bg="red")
-            self.recording_indicator.config(bg="red")
+            self.record_btn.config(text="⬛ Stop Rec", bg="#d32f2f")
+            self.recording_indicator.config(bg="#d32f2f")
             self.status.set(f"Recording to: {os.path.basename(self.recording_output_path)}")
             
             # Clear countdown display after a moment
@@ -3852,8 +4030,8 @@ class VideoMixer:
                 
                 self.recording_thread = None
                 
-                self.record_btn.config(text="● Record", bg="lightgray")
-                self.recording_indicator.config(bg="gray")
+                self.record_btn.config(text="● Record", bg="#2d2d2d")
+                self.recording_indicator.config(bg="#2d2d2d")
                 
                 # Restore metronome state
                 self.metro_var.set(self.metronome_state_before_recording)
@@ -3893,8 +4071,8 @@ class VideoMixer:
             traceback.print_exc()
             print("=== End Stop Recording Debug ===")
             messagebox.showerror("Recording Error", f"Error stopping recording: {str(e)}")
-            self.record_btn.config(text="● Record", bg="lightgray")
-            self.recording_indicator.config(bg="gray")
+            self.record_btn.config(text="● Record", bg="#2d2d2d")
+            self.recording_indicator.config(bg="#2d2d2d")
             # Restore metronome state even on error
             self.metro_var.set(self.metronome_state_before_recording)
             self.metronome.enabled = self.metronome_state_before_recording
