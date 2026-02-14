@@ -3559,9 +3559,11 @@ class VideoMixer:
                     self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
                     
                     # Cache the last rendered frame in BGR format for FrameRecorder
-                    # blended is already in BGR from OpenCV processing
-                    # Convert from float32 (0.0-1.0) to uint8 (0-255) for cv2.VideoWriter
-                    self.last_rendered_frame = (np.clip(blended, 0, 1) * 255).astype(np.uint8)
+                    # Ensure frame is uint8 in range 0-255 for video encoding
+                    if blended.dtype != np.uint8:
+                        self.last_rendered_frame = (np.clip(blended, 0, 1) * 255).astype(np.uint8)
+                    else:
+                        self.last_rendered_frame = blended.copy()
         except Exception as e:
             print(f"ERROR in update_loop: {e}")
             traceback.print_exc()
