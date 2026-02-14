@@ -2255,7 +2255,8 @@ class VideoProcessor(threading.Thread):
                         try:
                             while not self.frame_queue.empty(): self.frame_queue.get_nowait()
                             self.frame_queue.put_nowait((blended, bp))
-                        except: pass
+                        except (queue.Full, queue.Empty):
+                            pass  # Queue operations can safely fail
             except Exception as e:
                 print(f"ERROR in VideoProcessor frame processing: {e}")
                 traceback.print_exc()
