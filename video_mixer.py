@@ -9,6 +9,7 @@ import threading
 import time
 import os
 import json
+import traceback
 from datetime import datetime
 try:
     import winsound
@@ -311,7 +312,6 @@ class Modulator:
             return value * self.depth
         except Exception as e:
             print(f"ERROR in Modulator.get_value: {e}")
-            import traceback
             traceback.print_exc()
             return 0.0  # Safe default
     
@@ -1326,7 +1326,6 @@ class VideoChannel:
                     frame = cv2.GaussianBlur(frame, (k, k), 0)
             except Exception as e:
                 print(f"ERROR in blur LFO processing: {e}")
-                import traceback
                 traceback.print_exc()
                 # Continue without blur on error
 
@@ -2259,7 +2258,6 @@ class VideoProcessor(threading.Thread):
                         except: pass
             except Exception as e:
                 print(f"ERROR in VideoProcessor frame processing: {e}")
-                import traceback
                 traceback.print_exc()
             time.sleep(0.001)
     
@@ -3441,7 +3439,6 @@ class VideoMixer:
             return self.output_buffer
         except Exception as e:
             print(f"ERROR in blend_frames: {e}")
-            import traceback
             traceback.print_exc()
             # Return a black frame on error
             return np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
@@ -3560,7 +3557,6 @@ class VideoMixer:
                     self.last_rendered_frame = blended.copy()
         except Exception as e:
             print(f"ERROR in update_loop: {e}")
-            import traceback
             traceback.print_exc()
         
         # Update timeline playhead
