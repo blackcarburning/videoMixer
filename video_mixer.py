@@ -9,6 +9,7 @@ import threading
 import time
 import os
 import json
+import traceback
 from datetime import datetime
 try:
     import winsound
@@ -247,67 +248,72 @@ class Modulator:
         
     def get_value(self, beat_position, bpm=120.0, env_attack=0.1, env_release=0.5):
         # Note: env_attack and env_release defaults should match VideoMixer.__init__ values
-        if not self.enabled or self.depth == 0:
-            return 0.0
-        cp = ((beat_position / self.rate) + self.phase) % 1.0
-        value = 0.0
-        if self.wave_type == "sine":
-            value = Modulator._sin_table[int(cp * 4095)]
-        elif self.wave_type == "square":
-            value = 1.0 if cp < 0.5 else -1.0
-        elif self.wave_type == "triangle":
-            value = 4*cp if cp < 0.25 else (2-4*cp if cp < 0.75 else 4*cp-4)
-        elif self.wave_type == "saw_forward":
-            value = 2.0 * cp - 1.0
-        elif self.wave_type == "saw_backward":
-            value = 1.0 - 2.0 * cp
-        elif self.wave_type == "envelope":
-            # Calculate envelope using attack and release times
-            # Convert time in seconds to fraction of cycle
-            beat_duration = 60.0 / bpm  # seconds per beat
-            cycle_duration = self.rate * beat_duration  # seconds per cycle
-            
-            # Calculate attack and release as fractions of the cycle
-            if cycle_duration > 0:
-                attack_fraction = min(env_attack / cycle_duration, 1.0)
-                release_fraction = min(env_release / cycle_duration, 1.0)
-            else:
-                attack_fraction = 0.0
-                release_fraction = 0.0
-            
-            # Ensure attack + release doesn't exceed 1.0
-            total = attack_fraction + release_fraction
-            if total > 1.0:
-                attack_fraction = attack_fraction / total
-                release_fraction = release_fraction / total
-            
-            if cp < attack_fraction:
-                # Attack phase: ramp up from -1 to 1
-                if attack_fraction > 0:
-                    value = (cp / attack_fraction) * 2.0 - 1.0
+        try:
+            if not self.enabled or self.depth == 0:
+                return 0.0
+            cp = ((beat_position / self.rate) + self.phase) % 1.0
+            value = 0.0
+            if self.wave_type == "sine":
+                value = Modulator._sin_table[int(cp * 4095)]
+            elif self.wave_type == "square":
+                value = 1.0 if cp < 0.5 else -1.0
+            elif self.wave_type == "triangle":
+                value = 4*cp if cp < 0.25 else (2-4*cp if cp < 0.75 else 4*cp-4)
+            elif self.wave_type == "saw_forward":
+                value = 2.0 * cp - 1.0
+            elif self.wave_type == "saw_backward":
+                value = 1.0 - 2.0 * cp
+            elif self.wave_type == "envelope":
+                # Calculate envelope using attack and release times
+                # Convert time in seconds to fraction of cycle
+                beat_duration = 60.0 / bpm  # seconds per beat
+                cycle_duration = self.rate * beat_duration  # seconds per cycle
+                
+                # Calculate attack and release as fractions of the cycle
+                if cycle_duration > 0:
+                    attack_fraction = min(env_attack / cycle_duration, 1.0)
+                    release_fraction = min(env_release / cycle_duration, 1.0)
                 else:
-                    value = 1.0
-            elif cp < (attack_fraction + release_fraction):
-                # Release phase: ramp down from 1 to -1
-                if release_fraction > 0:
-                    release_progress = (cp - attack_fraction) / release_fraction
-                    value = 1.0 - (release_progress * 2.0)
+                    attack_fraction = 0.0
+                    release_fraction = 0.0
+                
+                # Ensure attack + release doesn't exceed 1.0
+                total = attack_fraction + release_fraction
+                if total > 1.0:
+                    attack_fraction = attack_fraction / total
+                    release_fraction = release_fraction / total
+                
+                if cp < attack_fraction:
+                    # Attack phase: ramp up from -1 to 1
+                    if attack_fraction > 0:
+                        value = (cp / attack_fraction) * 2.0 - 1.0
+                    else:
+                        value = 1.0
+                elif cp < (attack_fraction + release_fraction):
+                    # Release phase: ramp down from 1 to -1
+                    if release_fraction > 0:
+                        release_progress = (cp - attack_fraction) / release_fraction
+                        value = 1.0 - (release_progress * 2.0)
+                    else:
+                        value = -1.0
                 else:
+                    # Silent phase
                     value = -1.0
-            else:
-                # Silent phase
-                value = -1.0
-        if self.invert: value = -value
-        if self.pos_only: value = max(0, value)
-        elif self.neg_only: value = min(0, value)
-        
-        # Apply direction limiters (for speed modulator)
-        if self.fwd_only:
-            value = max(0, value)
-        elif self.rev_only:
-            value = min(0, value)
-        
-        return value * self.depth
+            if self.invert: value = -value
+            if self.pos_only: value = max(0, value)
+            elif self.neg_only: value = min(0, value)
+            
+            # Apply direction limiters (for speed modulator)
+            if self.fwd_only:
+                value = max(0, value)
+            elif self.rev_only:
+                value = min(0, value)
+            
+            return value * self.depth
+        except Exception as e:
+            print(f"ERROR in Modulator.get_value: {e}")
+            traceback.print_exc()
+            return 0.0  # Safe default
     
     def to_dict(self):
         return {'wave_type': self.wave_type, 'rate': self.rate, 'depth': self.depth, 
@@ -1148,8 +1154,8 @@ class VideoChannel:
             return None
         
         # Get envelope parameters from mixer if available
-        env_attack = mixer.env_attack if mixer else 0.1
-        env_release = mixer.env_release if mixer else 0.5
+        env_attack = getattr(mixer, 'env_attack', 0.1) if mixer else 0.1
+        env_release = getattr(mixer, 'env_release', 0.5) if mixer else 0.5
             
         with self.lock:
             target_idx = -1
@@ -1308,14 +1314,21 @@ class VideoChannel:
                 frame = cv2.warpAffine(frame, M, (w, h))
 
         if self.blur_mod.enabled and self.blur_mod.depth > 0:
-            # get_value returns -depth to +depth, map to 0 to depth
-            # At LFO bottom (-depth), blur = 0 (sharp)
-            # At LFO top (+depth), blur = depth (maximum blur)
-            lfo_output = self.blur_mod.get_value(beat_pos, bpm, env_attack, env_release)
-            bval = (lfo_output + self.blur_mod.depth) / 2.0  # Maps 0 to depth
-            if bval > 0.05:
-                k = int(bval * 30) * 2 + 1 
-                frame = cv2.GaussianBlur(frame, (k, k), 0)
+            try:
+                # get_value returns -depth to +depth, map to 0 to depth
+                # At LFO bottom (-depth), blur = 0 (sharp)
+                # At LFO top (+depth), blur = depth (maximum blur)
+                lfo_output = self.blur_mod.get_value(beat_pos, bpm, env_attack, env_release)
+                bval = (lfo_output + self.blur_mod.depth) / 2.0  # Maps 0 to depth
+                if bval > 0.05:
+                    frame = frame.copy()  # Copy before modifying to avoid corrupting cache
+                    k = int(bval * 30) * 2 + 1 
+                    frame = cv2.GaussianBlur(frame, (k, k), 0)
+            except Exception as e:
+                print(f"ERROR in blur LFO processing: {e}")
+                traceback.print_exc()
+                # Continue without blur on error
+
 
         if self.chroma_mod.enabled and self.chroma_mod.depth > 0:
             cval = self.chroma_mod.get_value(beat_pos, bpm, env_attack, env_release) * 20.0  # Max offset of 20 pixels
@@ -2228,19 +2241,25 @@ class VideoProcessor(threading.Thread):
             # Metronome needs raw time, but we feed it the corrected time
             self.mixer.metronome.check_tick(bp)
             
-            fa, oa, fb, ob = None, 1.0, None, 1.0
-            if self.mixer.channel_a.cap:
-                r = self.mixer.channel_a.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar, self.mixer)
-                if r: fa, oa = r
-            if self.mixer.channel_b.cap:
-                r = self.mixer.channel_b.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar, self.mixer)
-                if r: fb, ob = r
-            if fa is not None or fb is not None:
-                blended = self.mixer.blend_frames(fa, oa, fb, ob, bp)
-                try:
-                    while not self.frame_queue.empty(): self.frame_queue.get_nowait()
-                    self.frame_queue.put_nowait((blended, bp))
-                except: pass
+            try:
+                fa, oa, fb, ob = None, 1.0, None, 1.0
+                if self.mixer.channel_a.cap:
+                    r = self.mixer.channel_a.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar, self.mixer)
+                    if r: fa, oa = r
+                if self.mixer.channel_b.cap:
+                    r = self.mixer.channel_b.get_frame(bp, dt, self.mixer.bpm, self.mixer.beats_per_bar, self.mixer)
+                    if r: fb, ob = r
+                if fa is not None or fb is not None:
+                    blended = self.mixer.blend_frames(fa, oa, fb, ob, bp)
+                    if blended is not None:
+                        try:
+                            while not self.frame_queue.empty(): self.frame_queue.get_nowait()
+                            self.frame_queue.put_nowait((blended, bp))
+                        except (queue.Full, queue.Empty):
+                            pass  # Queue operations can safely fail
+            except Exception as e:
+                print(f"ERROR in VideoProcessor frame processing: {e}")
+                traceback.print_exc()
             time.sleep(0.001)
     
     def start_proc(self, st):
@@ -3397,27 +3416,33 @@ class VideoMixer:
             return a * mix_a + b * mix_b
     
     def blend_frames(self, fa, oa, fb, ob, bp):
-        mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp, self.bpm, self.env_attack, self.env_release) * 0.5))
-        if fa is None:
-            fa = np.zeros_like(self.blend_buffer)
-            oa = 1.0
-        if fb is None:
-            fb = np.zeros_like(self.blend_buffer)
-            ob = 1.0
-        mix_a = oa * (1.0 - mix)
-        mix_b = ob * mix
-        self.blend_buffer[:] = self.apply_blend_mode(fa, fb, self.blend_mode, mix_a, mix_b)
-        mb = self.mbright.get()
-        mc = self.mcontr.get()
-        if mb != 0 or mc != 1.0:
-            self.blend_buffer += mb
-            self.blend_buffer -= 0.5
-            self.blend_buffer *= mc
-            self.blend_buffer += 0.5
-        np.clip(self.blend_buffer, 0, 1, out=self.blend_buffer)
-        np.multiply(self.blend_buffer, 255, out=self.blend_buffer)
-        self.output_buffer[:] = self.blend_buffer.astype(np.uint8)
-        return self.output_buffer
+        try:
+            mix = max(0.0, min(1.0, self.mix + self.mix_mod.get_value(bp, self.bpm, self.env_attack, self.env_release) * 0.5))
+            if fa is None:
+                fa = np.zeros_like(self.blend_buffer)
+                oa = 1.0
+            if fb is None:
+                fb = np.zeros_like(self.blend_buffer)
+                ob = 1.0
+            mix_a = oa * (1.0 - mix)
+            mix_b = ob * mix
+            self.blend_buffer[:] = self.apply_blend_mode(fa, fb, self.blend_mode, mix_a, mix_b)
+            mb = self.mbright.get()
+            mc = self.mcontr.get()
+            if mb != 0 or mc != 1.0:
+                self.blend_buffer += mb
+                self.blend_buffer -= 0.5
+                self.blend_buffer *= mc
+                self.blend_buffer += 0.5
+            np.clip(self.blend_buffer, 0, 1, out=self.blend_buffer)
+            np.multiply(self.blend_buffer, 255, out=self.blend_buffer)
+            self.output_buffer[:] = self.blend_buffer.astype(np.uint8)
+            return self.output_buffer
+        except Exception as e:
+            print(f"ERROR in blend_frames: {e}")
+            traceback.print_exc()
+            # Return a black frame on error
+            return np.zeros((self.preview_height, self.preview_width, 3), dtype=np.uint8)
     
     def get_current_frame(self):
         """Get the current blended frame for recording.
@@ -3511,20 +3536,29 @@ class VideoMixer:
             self.sync_start()
     
     def update_loop(self):
-        fd = self.processor.get_frame()
-        if fd:
-            blended, bp = fd
-            self.beat_position = bp
-            self.beat_var.set(f"Beat: {int(round(bp))}")
-            self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
-            rgb = blended[:, :, ::-1]
-            img = Image.fromarray(rgb)
-            self.preview_photo = ImageTk.PhotoImage(img)
-            self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
-            
-            # Cache the last rendered frame in BGR format for FrameRecorder
-            # blended is already in BGR from OpenCV processing
-            self.last_rendered_frame = blended.copy()
+        try:
+            fd = self.processor.get_frame()
+            if fd:
+                blended, bp = fd
+                if blended is None:
+                    print("WARNING: blended frame is None in update_loop")
+                elif blended.size == 0:
+                    print("WARNING: blended frame has size 0 in update_loop")
+                else:
+                    self.beat_position = bp
+                    self.beat_var.set(f"Beat: {int(round(bp))}")
+                    self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
+                    rgb = blended[:, :, ::-1]
+                    img = Image.fromarray(rgb)
+                    self.preview_photo = ImageTk.PhotoImage(img)
+                    self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo)
+                    
+                    # Cache the last rendered frame in BGR format for FrameRecorder
+                    # blended is already in BGR from OpenCV processing
+                    self.last_rendered_frame = blended.copy()
+        except Exception as e:
+            print(f"ERROR in update_loop: {e}")
+            traceback.print_exc()
         
         # Update timeline playhead
         if hasattr(self, 'timeline_widget'):
