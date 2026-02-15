@@ -3288,6 +3288,7 @@ class VideoMixer:
         c['loop_start_beat'] = tk.DoubleVar(value=0.0)
         ttk.Spinbox(fr_manual_start, from_=0.0, to=9999.0, textvariable=c['loop_start_beat'], width=8, increment=0.25,
                    command=lambda: setattr(ch, 'loop_start_beat', c['loop_start_beat'].get())).pack(side=tk.LEFT)
+        c['loop_start_beat'].trace_add('write', lambda *args: setattr(ch, 'loop_start_beat', c['loop_start_beat'].get()) if c['loop_start_beat'].get() >= 0 else None)
 
         fr_manual_end = ttk.Frame(tab_loop)
         fr_manual_end.pack(fill=tk.X, pady=2)
@@ -3295,6 +3296,7 @@ class VideoMixer:
         c['loop_end_beat'] = tk.DoubleVar(value=4.0)
         ttk.Spinbox(fr_manual_end, from_=0.0, to=9999.0, textvariable=c['loop_end_beat'], width=8, increment=0.25,
                    command=lambda: setattr(ch, 'loop_end_beat', c['loop_end_beat'].get())).pack(side=tk.LEFT)
+        c['loop_end_beat'].trace_add('write', lambda *args: setattr(ch, 'loop_end_beat', c['loop_end_beat'].get()) if c['loop_end_beat'].get() >= 0 else None)
 
 
         fr_str = ttk.Frame(tab_fx)
