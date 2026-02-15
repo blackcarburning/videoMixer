@@ -3435,23 +3435,33 @@ class VideoMixer:
         c['seq_jump_w'] = SequencerWidget(tab_seq, ch, 'seq_jump', "Jump", "multi_jump")
         c['seq_jump_w'].pack(pady=5)
         
-        # SEQ Help Section
-        ttk.Separator(tab_seq, orient='horizontal').pack(fill=tk.X, pady=10)
+        # SEQ Help Section (scrollable)
+        ttk.Separator(tab_seq, orient='horizontal').pack(fill=tk.X, pady=5)
+        ttk.Label(tab_seq, text="Help:", font=("Arial", 8, "bold")).pack(anchor=tk.W)
+
         help_frame = ttk.Frame(tab_seq)
-        help_frame.pack(fill=tk.X, pady=5)
+        help_frame.pack(fill=tk.X, pady=2)
 
-        help_text = """Controls:
-• Gate: Toggle steps ON (green) / OFF (gray) - controls visibility
-• Stutter: Toggle steps to freeze frame (green = freeze)
+        help_text = """• Gate: ON (green) / OFF (gray) - controls visibility
+• Stutter: Freeze frame (green = freeze)
 • Speed: Gray=1x, Yellow=2x, Blue=0.5x, Red=Reverse, Black=Freeze
-• Jump: Gray=None, Yellow=Jump back 1 beat, Red=Jump back 1 bar
+• Jump: Gray=None, Yellow=-1 beat, Red=-1 bar
+• Timebase: Beats per 16 steps (4=1 bar, 8=2 bars, 16=4 bars)
+• Envelope: Attack/Decay fade for gate transitions
+• Snare: Drum hit on gate-on steps"""
 
-Timebase: Sets how many beats the 16 steps span (e.g., 4 = 1 bar)
-Envelope: Attack/Decay fade for gate transitions
-Snare: Plays drum hit on gate-on steps"""
+        # Create text widget with scrollbar
+        help_text_widget = tk.Text(help_frame, height=4, width=50, font=("Arial", 8), 
+                                   bg="#2d2d2d", fg="#aaaaaa", wrap=tk.WORD,
+                                   relief=tk.FLAT, borderwidth=0)
+        help_scrollbar = ttk.Scrollbar(help_frame, orient=tk.VERTICAL, command=help_text_widget.yview)
+        help_text_widget.configure(yscrollcommand=help_scrollbar.set)
 
-        help_label = ttk.Label(help_frame, text=help_text, font=("Arial", 8), justify=tk.LEFT, foreground="#aaaaaa")
-        help_label.pack(anchor=tk.W, padx=5)
+        help_text_widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        help_text_widget.insert(tk.END, help_text)
+        help_text_widget.configure(state=tk.DISABLED)  # Make read-only
         
         # DIS (Disintegration) Tab
         # Helper function to create a disintegration effect control
@@ -3580,78 +3590,73 @@ Snare: Plays drum hit on gate-on steps"""
                        command=lambda: setattr(ch, 'manual_invert', c['manual_invert'].get())).pack(side=tk.LEFT, padx=5)
         
         # Camera Shake Section
-        ttk.Separator(tab_man, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Separator(tab_man, orient='horizontal').pack(fill=tk.X, pady=5)
         ttk.Label(tab_man, text="Camera Shake", font=("Arial", 9, "bold")).pack(anchor=tk.W)
 
-        fr_shake_amt = ttk.Frame(tab_man)
-        fr_shake_amt.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_amt, text="Amount:", width=10).pack(side=tk.LEFT)
+        # Amount and Frequency on same row
+        fr_shake_top = ttk.Frame(tab_man)
+        fr_shake_top.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_shake_top, text="Amount:", width=7).pack(side=tk.LEFT)
         c['shake_amount'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_amt, from_=0.0, to=1.0, variable=c['shake_amount'], length=150,
+        ttk.Scale(fr_shake_top, from_=0.0, to=1.0, variable=c['shake_amount'], length=80,
                  command=lambda v, ch=ch: setattr(ch, 'shake_amount', float(v))).pack(side=tk.LEFT)
-        c['shake_amount_lbl'] = ttk.Label(fr_shake_amt, text="0.000", width=6)
-        c['shake_amount_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_amount_lbl'] = ttk.Label(fr_shake_top, text="0.000", width=5)
+        c['shake_amount_lbl'].pack(side=tk.LEFT)
         c['shake_amount'].trace_add('write', lambda *args: c['shake_amount_lbl'].config(text=f"{c['shake_amount'].get():.3f}"))
 
-        fr_shake_h = ttk.Frame(tab_man)
-        fr_shake_h.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_h, text="Horizontal:", width=10).pack(side=tk.LEFT)
+        ttk.Label(fr_shake_top, text="  Freq:", width=5).pack(side=tk.LEFT)
+        c['shake_frequency'] = tk.DoubleVar(value=1.0)
+        ttk.Scale(fr_shake_top, from_=0.1, to=2.0, variable=c['shake_frequency'], length=80,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_frequency', float(v))).pack(side=tk.LEFT)
+        c['shake_frequency_lbl'] = ttk.Label(fr_shake_top, text="1.000", width=5)
+        c['shake_frequency_lbl'].pack(side=tk.LEFT)
+        c['shake_frequency'].trace_add('write', lambda *args: c['shake_frequency_lbl'].config(text=f"{c['shake_frequency'].get():.3f}"))
+
+        # Horizontal and Vertical on same row
+        fr_shake_hv = ttk.Frame(tab_man)
+        fr_shake_hv.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_shake_hv, text="Horiz:", width=7).pack(side=tk.LEFT)
         c['shake_horizontal'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_h, from_=0.0, to=1.0, variable=c['shake_horizontal'], length=150,
+        ttk.Scale(fr_shake_hv, from_=0.0, to=1.0, variable=c['shake_horizontal'], length=80,
                  command=lambda v, ch=ch: setattr(ch, 'shake_horizontal', float(v))).pack(side=tk.LEFT)
-        c['shake_horizontal_lbl'] = ttk.Label(fr_shake_h, text="0.000", width=6)
-        c['shake_horizontal_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_horizontal_lbl'] = ttk.Label(fr_shake_hv, text="0.000", width=5)
+        c['shake_horizontal_lbl'].pack(side=tk.LEFT)
         c['shake_horizontal'].trace_add('write', lambda *args: c['shake_horizontal_lbl'].config(text=f"{c['shake_horizontal'].get():.3f}"))
 
-        fr_shake_v = ttk.Frame(tab_man)
-        fr_shake_v.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_v, text="Vertical:", width=10).pack(side=tk.LEFT)
+        ttk.Label(fr_shake_hv, text="  Vert:", width=5).pack(side=tk.LEFT)
         c['shake_vertical'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_v, from_=0.0, to=1.0, variable=c['shake_vertical'], length=150,
+        ttk.Scale(fr_shake_hv, from_=0.0, to=1.0, variable=c['shake_vertical'], length=80,
                  command=lambda v, ch=ch: setattr(ch, 'shake_vertical', float(v))).pack(side=tk.LEFT)
-        c['shake_vertical_lbl'] = ttk.Label(fr_shake_v, text="0.000", width=6)
-        c['shake_vertical_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_vertical_lbl'] = ttk.Label(fr_shake_hv, text="0.000", width=5)
+        c['shake_vertical_lbl'].pack(side=tk.LEFT)
         c['shake_vertical'].trace_add('write', lambda *args: c['shake_vertical_lbl'].config(text=f"{c['shake_vertical'].get():.3f}"))
 
-        fr_shake_t = ttk.Frame(tab_man)
-        fr_shake_t.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_t, text="Tilt:", width=10).pack(side=tk.LEFT)
+        # Tilt, Zoom, Blur on same row
+        fr_shake_tzb = ttk.Frame(tab_man)
+        fr_shake_tzb.pack(fill=tk.X, pady=2)
+        ttk.Label(fr_shake_tzb, text="Tilt:", width=7).pack(side=tk.LEFT)
         c['shake_tilt'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_t, from_=0.0, to=1.0, variable=c['shake_tilt'], length=150,
+        ttk.Scale(fr_shake_tzb, from_=0.0, to=1.0, variable=c['shake_tilt'], length=60,
                  command=lambda v, ch=ch: setattr(ch, 'shake_tilt', float(v))).pack(side=tk.LEFT)
-        c['shake_tilt_lbl'] = ttk.Label(fr_shake_t, text="0.000", width=6)
-        c['shake_tilt_lbl'].pack(side=tk.LEFT, padx=5)
-        c['shake_tilt'].trace_add('write', lambda *args: c['shake_tilt_lbl'].config(text=f"{c['shake_tilt'].get():.3f}"))
+        c['shake_tilt_lbl'] = ttk.Label(fr_shake_tzb, text="0.00", width=4)
+        c['shake_tilt_lbl'].pack(side=tk.LEFT)
+        c['shake_tilt'].trace_add('write', lambda *args: c['shake_tilt_lbl'].config(text=f"{c['shake_tilt'].get():.2f}"))
 
-        fr_shake_z = ttk.Frame(tab_man)
-        fr_shake_z.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_z, text="Zoom:", width=10).pack(side=tk.LEFT)
+        ttk.Label(fr_shake_tzb, text=" Zoom:", width=5).pack(side=tk.LEFT)
         c['shake_zoom'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_z, from_=0.0, to=1.0, variable=c['shake_zoom'], length=150,
+        ttk.Scale(fr_shake_tzb, from_=0.0, to=1.0, variable=c['shake_zoom'], length=60,
                  command=lambda v, ch=ch: setattr(ch, 'shake_zoom', float(v))).pack(side=tk.LEFT)
-        c['shake_zoom_lbl'] = ttk.Label(fr_shake_z, text="0.000", width=6)
-        c['shake_zoom_lbl'].pack(side=tk.LEFT, padx=5)
-        c['shake_zoom'].trace_add('write', lambda *args: c['shake_zoom_lbl'].config(text=f"{c['shake_zoom'].get():.3f}"))
+        c['shake_zoom_lbl'] = ttk.Label(fr_shake_tzb, text="0.00", width=4)
+        c['shake_zoom_lbl'].pack(side=tk.LEFT)
+        c['shake_zoom'].trace_add('write', lambda *args: c['shake_zoom_lbl'].config(text=f"{c['shake_zoom'].get():.2f}"))
 
-        fr_shake_b = ttk.Frame(tab_man)
-        fr_shake_b.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_b, text="Blur:", width=10).pack(side=tk.LEFT)
+        ttk.Label(fr_shake_tzb, text=" Blur:", width=4).pack(side=tk.LEFT)
         c['shake_blur'] = tk.DoubleVar(value=0.0)
-        ttk.Scale(fr_shake_b, from_=0.0, to=1.0, variable=c['shake_blur'], length=150,
+        ttk.Scale(fr_shake_tzb, from_=0.0, to=1.0, variable=c['shake_blur'], length=60,
                  command=lambda v, ch=ch: setattr(ch, 'shake_blur', float(v))).pack(side=tk.LEFT)
-        c['shake_blur_lbl'] = ttk.Label(fr_shake_b, text="0.000", width=6)
-        c['shake_blur_lbl'].pack(side=tk.LEFT, padx=5)
-        c['shake_blur'].trace_add('write', lambda *args: c['shake_blur_lbl'].config(text=f"{c['shake_blur'].get():.3f}"))
-
-        fr_shake_freq = ttk.Frame(tab_man)
-        fr_shake_freq.pack(fill=tk.X, pady=3)
-        ttk.Label(fr_shake_freq, text="Frequency:", width=10).pack(side=tk.LEFT)
-        c['shake_frequency'] = tk.DoubleVar(value=1.0)
-        ttk.Scale(fr_shake_freq, from_=0.1, to=2.0, variable=c['shake_frequency'], length=150,
-                 command=lambda v, ch=ch: setattr(ch, 'shake_frequency', float(v))).pack(side=tk.LEFT)
-        c['shake_frequency_lbl'] = ttk.Label(fr_shake_freq, text="1.000", width=6)
-        c['shake_frequency_lbl'].pack(side=tk.LEFT, padx=5)
-        c['shake_frequency'].trace_add('write', lambda *args: c['shake_frequency_lbl'].config(text=f"{c['shake_frequency'].get():.3f}"))
+        c['shake_blur_lbl'] = ttk.Label(fr_shake_tzb, text="0.00", width=4)
+        c['shake_blur_lbl'].pack(side=tk.LEFT)
+        c['shake_blur'].trace_add('write', lambda *args: c['shake_blur_lbl'].config(text=f"{c['shake_blur'].get():.2f}"))
         
         return c
     
