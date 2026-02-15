@@ -538,6 +538,14 @@ class VideoChannel:
         self.manual_posterize = 0
         self.manual_invert = False
         
+        # Camera Shake
+        self.shake_amount = 0.0
+        self.shake_horizontal = 0.0
+        self.shake_vertical = 0.0
+        self.shake_tilt = 0.0
+        self.shake_zoom = 0.0
+        self.shake_blur = 0.0
+        
         # Pre-generate noise patterns for effects (separate for each effect)
         self.dis_particle_noise = None
         self.dis_thanos_noise = None
@@ -641,7 +649,10 @@ class VideoChannel:
              'dis_rain_trigger_enabled': self.dis_rain_trigger_enabled, 'dis_rain_trigger_beat': self.dis_rain_trigger_beat,
              'dis_rain_trigger_duration': self.dis_rain_trigger_duration,
              'manual_blur': self.manual_blur, 'manual_zoom': self.manual_zoom,
-             'manual_posterize': self.manual_posterize, 'manual_invert': self.manual_invert}
+             'manual_posterize': self.manual_posterize, 'manual_invert': self.manual_invert,
+             'shake_amount': self.shake_amount, 'shake_horizontal': self.shake_horizontal,
+             'shake_vertical': self.shake_vertical, 'shake_tilt': self.shake_tilt,
+             'shake_zoom': self.shake_zoom, 'shake_blur': self.shake_blur}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -712,6 +723,13 @@ class VideoChannel:
             self.manual_zoom = d.get('manual_zoom', 0.0)
             self.manual_posterize = d.get('manual_posterize', 0)
             self.manual_invert = d.get('manual_invert', False)
+            
+            self.shake_amount = d.get('shake_amount', 0.0)
+            self.shake_horizontal = d.get('shake_horizontal', 0.0)
+            self.shake_vertical = d.get('shake_vertical', 0.0)
+            self.shake_tilt = d.get('shake_tilt', 0.0)
+            self.shake_zoom = d.get('shake_zoom', 0.0)
+            self.shake_blur = d.get('shake_blur', 0.0)
             
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
@@ -906,6 +924,13 @@ class VideoChannel:
             self.manual_zoom = 0.0
             self.manual_posterize = 0
             self.manual_invert = False
+            
+            self.shake_amount = 0.0
+            self.shake_horizontal = 0.0
+            self.shake_vertical = 0.0
+            self.shake_tilt = 0.0
+            self.shake_zoom = 0.0
+            self.shake_blur = 0.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -1605,6 +1630,63 @@ class VideoChannel:
         if self.manual_invert:
             frame = frame.copy()
             frame = 1.0 - frame
+
+        # Camera Shake (driven by random values)
+        if self.shake_amount > 0:
+            frame = frame.copy()  # Copy frame once for all shake transformations
+            h, w = frame.shape[:2]
+            
+            # Generate random values for each component using different seeds
+            # Different cycle multipliers (17.3, 23.7, 31.1, 13.9, 19.7) create varied, 
+            # independent shake patterns for each component
+            cycle_h = int(beat_pos * 17.3)
+            cycle_v = int(beat_pos * 23.7)
+            cycle_t = int(beat_pos * 31.1)
+            cycle_z = int(beat_pos * 13.9)
+            cycle_b = int(beat_pos * 19.7)
+            
+            # Generate all random values in a single block for performance
+            np.random.seed(cycle_h % 10000)
+            rand_h = np.random.uniform(-1.0, 1.0) if self.shake_horizontal > 0 else 0
+            np.random.seed(cycle_v % 10000)
+            rand_v = np.random.uniform(-1.0, 1.0) if self.shake_vertical > 0 else 0
+            np.random.seed(cycle_t % 10000)
+            rand_t = np.random.uniform(-1.0, 1.0) if self.shake_tilt > 0 else 0
+            np.random.seed(cycle_z % 10000)
+            rand_z = np.random.uniform(-1.0, 1.0) if self.shake_zoom > 0 else 0
+            np.random.seed(cycle_b % 10000)
+            rand_b = abs(np.random.uniform(-1.0, 1.0)) if self.shake_blur > 0 else 0
+            np.random.seed(None)
+            
+            # Horizontal shake
+            offset_x = int(rand_h * self.shake_amount * self.shake_horizontal * 50) if self.shake_horizontal > 0 else 0
+            
+            # Vertical shake
+            offset_y = int(rand_v * self.shake_amount * self.shake_vertical * 50) if self.shake_vertical > 0 else 0
+            
+            # Apply translation if needed
+            if offset_x != 0 or offset_y != 0:
+                M_translate = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
+                frame = cv2.warpAffine(frame, M_translate, (w, h))
+            
+            # Tilt (rotation) shake
+            if self.shake_tilt > 0:
+                angle = rand_t * self.shake_amount * self.shake_tilt * 15  # Max 15 degrees
+                M_rotate = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+                frame = cv2.warpAffine(frame, M_rotate, (w, h))
+            
+            # Zoom shake
+            if self.shake_zoom > 0:
+                scale = 1.0 + rand_z * self.shake_amount * self.shake_zoom * 0.3  # Max 30% zoom variation
+                M_zoom = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
+                frame = cv2.warpAffine(frame, M_zoom, (w, h))
+            
+            # Blur shake
+            if self.shake_blur > 0:
+                blur_val = rand_b * self.shake_amount * self.shake_blur
+                if blur_val > 0.01:
+                    k = min(int(blur_val * 30) * 2 + 1, 61)  # Limit kernel size to max 61
+                    frame = cv2.GaussianBlur(frame, (k, k), 0)
 
         b = self.brightness + self.brightness_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
         c = self.contrast + self.contrast_mod.get_value(beat_pos, bpm, env_attack, env_release) * 0.5
@@ -3438,6 +3520,70 @@ class VideoMixer:
         ttk.Checkbutton(fr_man_invert, text="Invert Colors", variable=c['manual_invert'],
                        command=lambda: setattr(ch, 'manual_invert', c['manual_invert'].get())).pack(side=tk.LEFT, padx=5)
         
+        # Camera Shake Section
+        ttk.Separator(tab_man, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(tab_man, text="Camera Shake", font=("Arial", 9, "bold")).pack(anchor=tk.W)
+
+        fr_shake_amt = ttk.Frame(tab_man)
+        fr_shake_amt.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_amt, text="Amount:", width=10).pack(side=tk.LEFT)
+        c['shake_amount'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_amt, from_=0.0, to=1.0, variable=c['shake_amount'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_amount', float(v))).pack(side=tk.LEFT)
+        c['shake_amount_lbl'] = ttk.Label(fr_shake_amt, text="0.000", width=6)
+        c['shake_amount_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_amount'].trace_add('write', lambda *args: c['shake_amount_lbl'].config(text=f"{c['shake_amount'].get():.3f}"))
+
+        fr_shake_h = ttk.Frame(tab_man)
+        fr_shake_h.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_h, text="Horizontal:", width=10).pack(side=tk.LEFT)
+        c['shake_horizontal'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_h, from_=0.0, to=1.0, variable=c['shake_horizontal'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_horizontal', float(v))).pack(side=tk.LEFT)
+        c['shake_horizontal_lbl'] = ttk.Label(fr_shake_h, text="0.000", width=6)
+        c['shake_horizontal_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_horizontal'].trace_add('write', lambda *args: c['shake_horizontal_lbl'].config(text=f"{c['shake_horizontal'].get():.3f}"))
+
+        fr_shake_v = ttk.Frame(tab_man)
+        fr_shake_v.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_v, text="Vertical:", width=10).pack(side=tk.LEFT)
+        c['shake_vertical'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_v, from_=0.0, to=1.0, variable=c['shake_vertical'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_vertical', float(v))).pack(side=tk.LEFT)
+        c['shake_vertical_lbl'] = ttk.Label(fr_shake_v, text="0.000", width=6)
+        c['shake_vertical_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_vertical'].trace_add('write', lambda *args: c['shake_vertical_lbl'].config(text=f"{c['shake_vertical'].get():.3f}"))
+
+        fr_shake_t = ttk.Frame(tab_man)
+        fr_shake_t.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_t, text="Tilt:", width=10).pack(side=tk.LEFT)
+        c['shake_tilt'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_t, from_=0.0, to=1.0, variable=c['shake_tilt'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_tilt', float(v))).pack(side=tk.LEFT)
+        c['shake_tilt_lbl'] = ttk.Label(fr_shake_t, text="0.000", width=6)
+        c['shake_tilt_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_tilt'].trace_add('write', lambda *args: c['shake_tilt_lbl'].config(text=f"{c['shake_tilt'].get():.3f}"))
+
+        fr_shake_z = ttk.Frame(tab_man)
+        fr_shake_z.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_z, text="Zoom:", width=10).pack(side=tk.LEFT)
+        c['shake_zoom'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_z, from_=0.0, to=1.0, variable=c['shake_zoom'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_zoom', float(v))).pack(side=tk.LEFT)
+        c['shake_zoom_lbl'] = ttk.Label(fr_shake_z, text="0.000", width=6)
+        c['shake_zoom_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_zoom'].trace_add('write', lambda *args: c['shake_zoom_lbl'].config(text=f"{c['shake_zoom'].get():.3f}"))
+
+        fr_shake_b = ttk.Frame(tab_man)
+        fr_shake_b.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_b, text="Blur:", width=10).pack(side=tk.LEFT)
+        c['shake_blur'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_shake_b, from_=0.0, to=1.0, variable=c['shake_blur'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_blur', float(v))).pack(side=tk.LEFT)
+        c['shake_blur_lbl'] = ttk.Label(fr_shake_b, text="0.000", width=6)
+        c['shake_blur_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_blur'].trace_add('write', lambda *args: c['shake_blur_lbl'].config(text=f"{c['shake_blur'].get():.3f}"))
+        
         return c
     
     def setup_mod_simple(self, parent, mod, label):
@@ -3670,6 +3816,20 @@ class VideoMixer:
             c['manual_posterize'].set(ch.manual_posterize)
         if 'manual_invert' in c:
             c['manual_invert'].set(ch.manual_invert)
+        
+        # Update Camera Shake controls
+        if 'shake_amount' in c:
+            c['shake_amount'].set(ch.shake_amount)
+        if 'shake_horizontal' in c:
+            c['shake_horizontal'].set(ch.shake_horizontal)
+        if 'shake_vertical' in c:
+            c['shake_vertical'].set(ch.shake_vertical)
+        if 'shake_tilt' in c:
+            c['shake_tilt'].set(ch.shake_tilt)
+        if 'shake_zoom' in c:
+            c['shake_zoom'].set(ch.shake_zoom)
+        if 'shake_blur' in c:
+            c['shake_blur'].set(ch.shake_blur)
     
     def update_mod_ui(self, c, m):
         c['en'].set(m.enabled)
