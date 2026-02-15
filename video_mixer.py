@@ -545,6 +545,7 @@ class VideoChannel:
         self.shake_tilt = 0.0
         self.shake_zoom = 0.0
         self.shake_blur = 0.0
+        self.shake_frequency = 1.0  # Frequency multiplier (lower = slower shake)
         
         # Pre-generate noise patterns for effects (separate for each effect)
         self.dis_particle_noise = None
@@ -652,7 +653,8 @@ class VideoChannel:
              'manual_posterize': self.manual_posterize, 'manual_invert': self.manual_invert,
              'shake_amount': self.shake_amount, 'shake_horizontal': self.shake_horizontal,
              'shake_vertical': self.shake_vertical, 'shake_tilt': self.shake_tilt,
-             'shake_zoom': self.shake_zoom, 'shake_blur': self.shake_blur}
+             'shake_zoom': self.shake_zoom, 'shake_blur': self.shake_blur,
+             'shake_frequency': self.shake_frequency}
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -730,6 +732,7 @@ class VideoChannel:
             self.shake_tilt = d.get('shake_tilt', 0.0)
             self.shake_zoom = d.get('shake_zoom', 0.0)
             self.shake_blur = d.get('shake_blur', 0.0)
+            self.shake_frequency = d.get('shake_frequency', 1.0)
             
             self.seq_gate = d.get('seq_gate', [1]*16)
             self.seq_stutter = d.get('seq_stutter', [0]*16)
@@ -931,6 +934,7 @@ class VideoChannel:
             self.shake_tilt = 0.0
             self.shake_zoom = 0.0
             self.shake_blur = 0.0
+            self.shake_frequency = 1.0
     
     def _get_resized(self, frame_idx, raw_frame):
         if frame_idx in self.resized_cache:
@@ -1287,26 +1291,47 @@ class VideoChannel:
                 
                 else:
                     # Standard playback mode: use playback_position state
-                    # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
-                    speed_mod_value = self.speed_mod.get_value(beat_pos, bpm, env_attack, env_release) if self.speed_mod.enabled else 0.0
-                    effective_speed = self.speed * (1.0 + speed_mod_value * 8.0)
                     
-                    # Calculate frame advancement with sequencer speed multiplier
-                    frames_to_advance = delta_time * self.fps * effective_speed * seq_speed_mult
-                    
-                    # Advance or reverse playback position
-                    if self.reverse:
-                        self.playback_position -= frames_to_advance
+                    # STUTTER: Freeze frame completely (don't advance at all)
+                    if is_stuttering or spd_mod_idx == 4:  # Stutter or Freeze/Black
+                        # Don't change playback_position - frame stays frozen
+                        target_idx = int(self.playback_position)
                     else:
-                        self.playback_position += frames_to_advance
-                    
-                    # Handle looping/clamping
-                    if self.loop:
-                        self.playback_position %= self.frame_count
-                    else:
-                        self.playback_position = min(max(0, self.playback_position), self.frame_count - 1)
-                    
-                    target_idx = int(self.playback_position)
+                        # Apply speed modulator: modulator range [-1, 1] maps to speed multiplier [-8, 8]
+                        speed_mod_value = self.speed_mod.get_value(beat_pos, bpm, env_attack, env_release) if self.speed_mod.enabled else 0.0
+                        effective_speed = self.speed * (1.0 + speed_mod_value * 8.0)
+                        
+                        # Apply sequencer speed multiplier
+                        # For reverse mode (spd_mod_idx == 3), negate the speed
+                        if spd_mod_idx == 3:  # Reverse
+                            effective_speed = -effective_speed
+                        else:
+                            effective_speed = effective_speed * seq_speed_mult
+                        
+                        # Calculate frame advancement
+                        frames_to_advance = delta_time * self.fps * effective_speed
+                        
+                        # JUMP: Seek backwards in video
+                        if jmp_mod_idx == 1:  # Yellow - jump back 1 beat worth of frames
+                            jump_frames = (60.0 / bpm) * self.fps  # frames per beat
+                            self.playback_position -= jump_frames
+                        elif jmp_mod_idx == 2:  # Red - jump back 1 bar worth of frames
+                            jump_frames = (60.0 / bpm) * self.fps * self.BEATS_PER_BAR
+                            self.playback_position -= jump_frames
+                        
+                        # Advance or reverse playback position
+                        if self.reverse:
+                            self.playback_position -= frames_to_advance
+                        else:
+                            self.playback_position += frames_to_advance
+                        
+                        # Handle looping/clamping
+                        if self.loop:
+                            self.playback_position %= self.frame_count
+                        else:
+                            self.playback_position = min(max(0, self.playback_position), self.frame_count - 1)
+                        
+                        target_idx = int(self.playback_position)
                 
                 target_idx = max(0, min(self.frame_count - 1, int(target_idx)))
                 
@@ -1639,11 +1664,13 @@ class VideoChannel:
             # Generate random values for each component using different seeds
             # Different cycle multipliers (17.3, 23.7, 31.1, 13.9, 19.7) create varied, 
             # independent shake patterns for each component
-            cycle_h = int(beat_pos * 17.3)
-            cycle_v = int(beat_pos * 23.7)
-            cycle_t = int(beat_pos * 31.1)
-            cycle_z = int(beat_pos * 13.9)
-            cycle_b = int(beat_pos * 19.7)
+            # Apply frequency control - lower values = slower shake
+            freq_adjusted_pos = beat_pos * self.shake_frequency
+            cycle_h = int(freq_adjusted_pos * 17.3)
+            cycle_v = int(freq_adjusted_pos * 23.7)
+            cycle_t = int(freq_adjusted_pos * 31.1)
+            cycle_z = int(freq_adjusted_pos * 13.9)
+            cycle_b = int(freq_adjusted_pos * 19.7)
             
             # Generate all random values in a single block for performance
             np.random.seed(cycle_h % 10000)
@@ -3583,6 +3610,16 @@ class VideoMixer:
         c['shake_blur_lbl'] = ttk.Label(fr_shake_b, text="0.000", width=6)
         c['shake_blur_lbl'].pack(side=tk.LEFT, padx=5)
         c['shake_blur'].trace_add('write', lambda *args: c['shake_blur_lbl'].config(text=f"{c['shake_blur'].get():.3f}"))
+
+        fr_shake_freq = ttk.Frame(tab_man)
+        fr_shake_freq.pack(fill=tk.X, pady=3)
+        ttk.Label(fr_shake_freq, text="Frequency:", width=10).pack(side=tk.LEFT)
+        c['shake_frequency'] = tk.DoubleVar(value=1.0)
+        ttk.Scale(fr_shake_freq, from_=0.1, to=2.0, variable=c['shake_frequency'], length=150,
+                 command=lambda v, ch=ch: setattr(ch, 'shake_frequency', float(v))).pack(side=tk.LEFT)
+        c['shake_frequency_lbl'] = ttk.Label(fr_shake_freq, text="1.000", width=6)
+        c['shake_frequency_lbl'].pack(side=tk.LEFT, padx=5)
+        c['shake_frequency'].trace_add('write', lambda *args: c['shake_frequency_lbl'].config(text=f"{c['shake_frequency'].get():.3f}"))
         
         return c
     
@@ -3830,6 +3867,8 @@ class VideoMixer:
             c['shake_zoom'].set(ch.shake_zoom)
         if 'shake_blur' in c:
             c['shake_blur'].set(ch.shake_blur)
+        if 'shake_frequency' in c:
+            c['shake_frequency'].set(ch.shake_frequency)
     
     def update_mod_ui(self, c, m):
         c['en'].set(m.enabled)
