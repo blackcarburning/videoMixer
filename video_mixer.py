@@ -4464,6 +4464,7 @@ class VideoMixer:
             # Ensure BPM is valid to avoid division by zero
             if self.bpm <= 0:
                 print(f"Warning: Invalid BPM ({self.bpm}), using default 120 BPM")
+                self.root.after(0, lambda: self.status.set(f"Warning: Invalid BPM, using default 120"))
                 bpm_for_calc = 120.0
             else:
                 bpm_for_calc = self.bpm
@@ -4538,7 +4539,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
@@ -4554,7 +4555,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
@@ -4568,7 +4569,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
