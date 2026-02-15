@@ -4497,7 +4497,8 @@ class VideoMixer:
                 audio_start_ms = recording_metrics.get('audio_start_ms', 0)
                 audio_end_ms = recording_metrics.get('audio_end_ms', 0)
                 
-                if audio_start_ms > 0 or audio_end_ms > 0:
+                # Validate that we have a valid audio segment (end must be >= start)
+                if audio_end_ms >= audio_start_ms and audio_end_ms > 0:
                     audio_segment_start_sec = audio_start_ms / 1000.0
                     audio_segment_duration_sec = (audio_end_ms - audio_start_ms) / 1000.0
                     print(f"=== Actual Audio Segment ===")
