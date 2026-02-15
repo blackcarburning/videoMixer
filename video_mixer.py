@@ -2557,7 +2557,7 @@ class VideoMixer:
         self.recording_output_path = None
         self.last_rendered_frame = None  # Cache last frame for FrameRecorder
         self.recording_loop_start_beats = 0  # Store loop start position when recording begins
-        self.recording_audio_start_ms = 0  # Store actual audio position when recording starts
+        self.recording_audio_start_ms = None  # Store actual audio position when recording starts
         
         self.setup_ui()
         self.update_loop()
@@ -4339,7 +4339,7 @@ class VideoMixer:
             if self.audio_track.enabled and self.audio_track.playing:
                 self.recording_audio_start_ms = self.audio_track.get_time_ms()
             else:
-                self.recording_audio_start_ms = 0
+                self.recording_audio_start_ms = None
             
             self.record_btn.config(text="⬛ Stop Rec", bg=self.THEME_COLORS['red'])
             self.recording_indicator.config(bg=self.THEME_COLORS['red'])
@@ -4398,7 +4398,7 @@ class VideoMixer:
                     print(f"Video file size: {os.path.getsize(output_path)} bytes")
                 
                 # Capture audio end position
-                recording_audio_end_ms = 0
+                recording_audio_end_ms = None
                 if self.audio_track.enabled and self.audio_track.playing:
                     recording_audio_end_ms = self.audio_track.get_time_ms()
                 
@@ -4494,11 +4494,11 @@ class VideoMixer:
             audio_segment_duration_sec = None
             
             if recording_metrics:
-                audio_start_ms = recording_metrics.get('audio_start_ms', 0)
-                audio_end_ms = recording_metrics.get('audio_end_ms', 0)
+                audio_start_ms = recording_metrics.get('audio_start_ms')
+                audio_end_ms = recording_metrics.get('audio_end_ms')
                 
-                # Validate that we have a valid audio segment (end must be >= start)
-                if audio_end_ms >= audio_start_ms and audio_end_ms > 0:
+                # Validate that we have valid audio positions (both must be set and end >= start)
+                if audio_start_ms is not None and audio_end_ms is not None and audio_end_ms >= audio_start_ms:
                     audio_segment_start_sec = audio_start_ms / 1000.0
                     audio_segment_duration_sec = (audio_end_ms - audio_start_ms) / 1000.0
                     print(f"=== Actual Audio Segment ===")
