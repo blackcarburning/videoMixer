@@ -1274,7 +1274,37 @@ class VideoChannel:
                         eff_beat_pos -= self.BEATS_PER_BAR * self.speed
                 
                 # Calculate target frame based on playback mode
-                if self.beat_loop_enabled:
+                if self.manual_loop_enabled:
+                    # Manual loop mode: loop between start_beat and end_beat
+                    loop_start = self.loop_start_beat
+                    loop_end = self.loop_end_beat
+                    loop_beats = loop_end - loop_start
+                    if loop_beats <= 0: loop_beats = 4.0
+                    
+                    # Apply speed multiplier (use absolute for magnitude)
+                    speed_adjusted_beat = eff_beat_pos * abs(seq_speed_mult)
+                    
+                    # Calculate progress within loop (relative to loop_start)
+                    beat_in_loop = (speed_adjusted_beat - loop_start) % loop_beats
+                    prog = beat_in_loop / loop_beats
+                    
+                    # Handle reverse
+                    eff_rev = self.reverse
+                    if spd_mod_idx == 3:  # Reverse speed mode
+                        eff_rev = not eff_rev
+                    if eff_rev:
+                        prog = 1.0 - prog
+                    
+                    # Calculate frame index - map beat range to frame range
+                    loop_frames = int(loop_beats * (60.0 / bpm) * self.fps)
+                    base_start = self.loop_start_frame
+                    mod_offset = 0
+                    if self.loop_start_mod.enabled:
+                        mod_offset = int(self.loop_start_mod.get_value(beat_pos, bpm, env_attack, env_release) * self.frame_count)
+                    fine_tune_offset = int((self.loop_start_mod.fine_tune / 100.0) * 0.01 * self.frame_count)
+                    target_idx = (base_start + mod_offset + fine_tune_offset + int(prog * loop_frames)) % self.frame_count
+
+                elif self.beat_loop_enabled:
                     # Beat loop mode: calculate frame directly from beat position
                     loop_beats = self.loop_length_beats
                     if loop_beats <= 0: loop_beats = 1.0
@@ -2271,7 +2301,8 @@ class FrameRecorder(threading.Thread):
         try:
             import ctypes
             k = ctypes.windll.kernel32
-            k.SetThreadPriority(k.GetCurrentThread(), 2)  # THREAD_PRIORITY_HIGHEST
+            k.SetThreadPriority(k.GetCurrentThread(), 15)  # THREAD_PRIORITY_TIME_CRITICAL
+            k.SetPriorityClass(k.GetCurrentProcess(), 0x80)  # HIGH_PRIORITY_CLASS
         except (AttributeError, ImportError, OSError):
             # Windows-specific priority setting not available on this platform
             pass
@@ -2317,9 +2348,13 @@ class FrameRecorder(threading.Thread):
                     next_frame_time = now + self.frame_interval
             else:
                 # Sleep until next frame time (with small buffer)
-                sleep_time = next_frame_time - now - 0.001
+                sleep_time = next_frame_time - now - 0.0005
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                
+                # After sleep, busy-wait for remaining time
+                while time.perf_counter() < next_frame_time:
+                    pass
         
         self.recording_end_time = time.perf_counter()
         self.writer.release()
