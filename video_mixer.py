@@ -560,8 +560,9 @@ class VideoChannel:
         self.beat_loop_enabled = False
         self.loop_length_beats = 4.0 
         self.loop_start_frame = 0
-        self.loop_end_frame = 0
-        self.len_override_enabled = True
+        self.loop_start_beat = 0.0
+        self.loop_end_beat = 0.0
+        self.manual_loop_enabled = False
         self.lock = threading.RLock()
         self.target_width = target_width
         self.target_height = target_height
@@ -617,8 +618,9 @@ class VideoChannel:
              'beat_loop_enabled': self.beat_loop_enabled, 
              'loop_length_beats': self.loop_length_beats,
              'loop_start_frame': self.loop_start_frame,
-             'loop_end_frame': self.loop_end_frame,
-             'len_override_enabled': self.len_override_enabled,
+             'loop_start_beat': self.loop_start_beat,
+             'loop_end_beat': self.loop_end_beat,
+             'manual_loop_enabled': self.manual_loop_enabled,
              'brightness_mod': self.brightness_mod.to_dict(), 'contrast_mod': self.contrast_mod.to_dict(),
              'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
              'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
@@ -751,8 +753,9 @@ class VideoChannel:
             self.beat_loop_enabled = d.get('beat_loop_enabled', False)
             self.loop_length_beats = d.get('loop_length_beats', 4.0)
             self.loop_start_frame = d.get('loop_start_frame', 0)
-            self.loop_end_frame = d.get('loop_end_frame', 0)
-            self.len_override_enabled = d.get('len_override_enabled', True)
+            self.loop_start_beat = d.get('loop_start_beat', 0.0)
+            self.loop_end_beat = d.get('loop_end_beat', d.get('loop_end_frame', 0.0))  # Backward compatibility
+            self.manual_loop_enabled = d.get('manual_loop_enabled', False)
             for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'dis_particle_mod', 'dis_thanos_mod', 'dis_glitch_mod', 'dis_scatter_mod', 'dis_ember_mod', 'dis_rain_mod']:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
@@ -822,8 +825,9 @@ class VideoChannel:
             self.beat_loop_enabled = False
             self.loop_length_beats = 4.0
             self.loop_start_frame = 0
-            self.loop_end_frame = 0
-            self.len_override_enabled = True
+            self.loop_start_beat = 0.0
+            self.loop_end_beat = 0.0
+            self.manual_loop_enabled = False
             self.brightness_mod.reset()
             self.contrast_mod.reset()
             self.saturation_mod.reset()
@@ -3240,7 +3244,8 @@ class VideoMixer:
         lrow = ttk.Frame(lf)
         lrow.pack(fill=tk.X)
         c['bl_en'] = tk.BooleanVar(value=False)
-        ttk.Checkbutton(lrow, text="On", variable=c['bl_en'], command=lambda: setattr(ch, 'beat_loop_enabled', c['bl_en'].get())).pack(side=tk.LEFT)
+        ttk.Checkbutton(lrow, text="On", variable=c['bl_en'], command=lambda: [setattr(ch, 'beat_loop_enabled', c['bl_en'].get()),
+                                                                                 c['manual_loop_enabled'].set(False) if c['bl_en'].get() else None]).pack(side=tk.LEFT)
         ttk.Label(lrow, text="Len:").pack(side=tk.LEFT, padx=5)
         c['bl_len_var'] = tk.StringVar(value="1 bar")
         bl_combo = ttk.Combobox(lrow, textvariable=c['bl_len_var'], values=VideoChannel.LOOP_LENGTH_LABELS, state="readonly", width=8)
@@ -3267,32 +3272,32 @@ class VideoMixer:
         c['fine_tune_lbl'].pack(side=tk.LEFT)
         c['fine_tune'].trace_add('write', lambda *args: c['fine_tune_lbl'].config(text=f"{c['fine_tune'].get():.2f}"))
 
-        # Manual Loop Points Section
+        # Manual Loop Section
         ttk.Separator(tab_loop, orient='horizontal').pack(fill=tk.X, pady=5)
-        ttk.Label(tab_loop, text="Manual Loop Points", font=("Arial", 9, "bold")).pack(anchor=tk.W)
+
+        fr_manual_loop = ttk.Frame(tab_loop)
+        fr_manual_loop.pack(fill=tk.X, pady=2)
+        c['manual_loop_enabled'] = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fr_manual_loop, text="Manual Loop", variable=c['manual_loop_enabled'],
+                       command=lambda: [setattr(ch, 'manual_loop_enabled', c['manual_loop_enabled'].get()),
+                                       c['bl_en'].set(False) if c['manual_loop_enabled'].get() else None]).pack(side=tk.LEFT)
 
         fr_manual_start = ttk.Frame(tab_loop)
         fr_manual_start.pack(fill=tk.X, pady=2)
-        ttk.Label(fr_manual_start, text="Start Frame:", width=12).pack(side=tk.LEFT)
-        c['manual_loop_start'] = tk.IntVar(value=0)
-        ttk.Spinbox(fr_manual_start, from_=0, to=99999, textvariable=c['manual_loop_start'], width=8,
-                   command=lambda: setattr(ch, 'loop_start_frame', c['manual_loop_start'].get())).pack(side=tk.LEFT)
-        c['manual_loop_start'].trace_add('write', lambda *args: setattr(ch, 'loop_start_frame', c['manual_loop_start'].get()) if c['manual_loop_start'].get() >= 0 else None)
+        ttk.Label(fr_manual_start, text="Start Beat:", width=10).pack(side=tk.LEFT)
+        c['loop_start_beat'] = tk.DoubleVar(value=0.0)
+        ttk.Spinbox(fr_manual_start, from_=0.0, to=9999.0, textvariable=c['loop_start_beat'], width=8, increment=0.25,
+                   command=lambda: setattr(ch, 'loop_start_beat', c['loop_start_beat'].get())).pack(side=tk.LEFT)
+        c['loop_start_beat'].trace_add('write', lambda *args: setattr(ch, 'loop_start_beat', c['loop_start_beat'].get()) if c['loop_start_beat'].get() >= 0 else None)
 
         fr_manual_end = ttk.Frame(tab_loop)
         fr_manual_end.pack(fill=tk.X, pady=2)
-        ttk.Label(fr_manual_end, text="End Frame:", width=12).pack(side=tk.LEFT)
-        c['manual_loop_end'] = tk.IntVar(value=0)
-        ttk.Spinbox(fr_manual_end, from_=0, to=99999, textvariable=c['manual_loop_end'], width=8,
-                   command=lambda: setattr(ch, 'loop_end_frame', c['manual_loop_end'].get())).pack(side=tk.LEFT)
-        c['manual_loop_end'].trace_add('write', lambda *args: setattr(ch, 'loop_end_frame', c['manual_loop_end'].get()) if c['manual_loop_end'].get() >= 0 else None)
+        ttk.Label(fr_manual_end, text="End Beat:", width=10).pack(side=tk.LEFT)
+        c['loop_end_beat'] = tk.DoubleVar(value=4.0)
+        ttk.Spinbox(fr_manual_end, from_=0.0, to=9999.0, textvariable=c['loop_end_beat'], width=8, increment=0.25,
+                   command=lambda: setattr(ch, 'loop_end_beat', c['loop_end_beat'].get())).pack(side=tk.LEFT)
+        c['loop_end_beat'].trace_add('write', lambda *args: setattr(ch, 'loop_end_beat', c['loop_end_beat'].get()) if c['loop_end_beat'].get() >= 0 else None)
 
-        fr_override = ttk.Frame(tab_loop)
-        fr_override.pack(fill=tk.X, pady=2)
-        c['len_override'] = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fr_override, text="Allow 'Len' dropdown to override end point", 
-                       variable=c['len_override'],
-                       command=lambda: setattr(ch, 'len_override_enabled', c['len_override'].get())).pack(side=tk.LEFT)
 
         fr_str = ttk.Frame(tab_fx)
         fr_str.pack(fill=tk.X, pady=2)
@@ -3943,12 +3948,12 @@ class VideoMixer:
             c['shake_blur'].set(ch.shake_blur)
         if 'shake_frequency' in c:
             c['shake_frequency'].set(ch.shake_frequency)
-        if 'manual_loop_start' in c:
-            c['manual_loop_start'].set(ch.loop_start_frame)
-        if 'manual_loop_end' in c:
-            c['manual_loop_end'].set(ch.loop_end_frame)
-        if 'len_override' in c:
-            c['len_override'].set(ch.len_override_enabled)
+        if 'loop_start_beat' in c:
+            c['loop_start_beat'].set(ch.loop_start_beat)
+        if 'loop_end_beat' in c:
+            c['loop_end_beat'].set(ch.loop_end_beat)
+        if 'manual_loop_enabled' in c:
+            c['manual_loop_enabled'].set(ch.manual_loop_enabled)
     
     def update_mod_ui(self, c, m):
         c['en'].set(m.enabled)
