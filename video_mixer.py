@@ -1221,7 +1221,7 @@ class VideoChannel:
                 frame = self.current_resized
             else:
                 # Calculate current sequencer step (16 steps per 4 beats = 1 bar)
-                seq_step = int((beat_pos % self.BEATS_PER_BAR) * 4) % self.STEPS_PER_BAR
+                seq_step = self._get_gate_step(beat_pos)
                 
                 # Get sequencer states for current step
                 is_stuttering = self.seq_stutter[seq_step]
@@ -2758,23 +2758,23 @@ class VideoMixer:
                        selectforeground=c['fg_bright'],
                        insertcolor=c['fg_bright'])
         
-        # TScale - slider styling with custom colors
+        # TScale - slider styling with improved visibility
         style.configure('TScale',
-                       background=c['bg_dark'],
-                       troughcolor=c['bg_light'],
-                       bordercolor=c['border_dark'],
+                       background=c['accent'],
+                       troughcolor='#4a4a4a',
+                       bordercolor=c['border_light'],
                        lightcolor=c['border_light'],
                        darkcolor=c['border_dark'],
                        sliderthickness=20,
                        sliderrelief='raised')
         style.map('TScale',
-                 background=[('active', c['accent'])])
+                 background=[('active', c['accent_hover'])])
         
-        # Horizontal.TScale - specific horizontal slider styling
+        # Horizontal.TScale - specific horizontal slider styling  
         style.configure('Horizontal.TScale',
-                       background=c['bg_dark'],
-                       troughcolor=c['bg_light'],
-                       bordercolor=c['border_dark'],
+                       background=c['accent'],
+                       troughcolor='#4a4a4a',
+                       bordercolor=c['border_light'],
                        sliderlength=30,
                        sliderrelief='raised')
         
@@ -3141,10 +3141,10 @@ class VideoMixer:
         nb.add(tab_main, text="Main")
         nb.add(tab_loop, text="Loop/Time")
         nb.add(tab_fx, text="FX")
-        nb.add(tab_seq, text="Seq")
-        nb.add(tab_bonus, text="Bonus")
+        nb.add(tab_bonus, text="FX2")
         nb.add(tab_dis, text="DIS")
         nb.add(tab_man, text="MAN")
+        nb.add(tab_seq, text="SEQ")
         
         row1 = ttk.Frame(tab_main)
         row1.pack(fill=tk.X, pady=2)
@@ -3279,28 +3279,28 @@ class VideoMixer:
         # Bonus Tab Effects
         # Move LFO effects to Bonus tab for better 4:3 aspect ratio compatibility
         fr_rgb = ttk.Frame(tab_bonus)
-        fr_rgb.pack(fill=tk.X, pady=2)
+        fr_rgb.pack(fill=tk.X, pady=5)
         ttk.Label(fr_rgb, text="RGB LFO:").pack(side=tk.LEFT)
         c['rgb_mod'] = self.setup_mod(fr_rgb, ch.rgb_mod, "On")
         fr_blur = ttk.Frame(tab_bonus)
-        fr_blur.pack(fill=tk.X, pady=2)
+        fr_blur.pack(fill=tk.X, pady=5)
         ttk.Label(fr_blur, text="Blur LFO:").pack(side=tk.LEFT)
         c['blur_mod'] = self.setup_mod(fr_blur, ch.blur_mod, "On")
         fr_zoom = ttk.Frame(tab_bonus)
-        fr_zoom.pack(fill=tk.X, pady=2)
+        fr_zoom.pack(fill=tk.X, pady=5)
         ttk.Label(fr_zoom, text="Zoom LFO:").pack(side=tk.LEFT)
         c['zoom_mod'] = self.setup_mod(fr_zoom, ch.zoom_mod, "On")
         fr_pix = ttk.Frame(tab_bonus)
-        fr_pix.pack(fill=tk.X, pady=2)
+        fr_pix.pack(fill=tk.X, pady=5)
         ttk.Label(fr_pix, text="Pixel LFO:").pack(side=tk.LEFT)
         c['pixel_mod'] = self.setup_mod(fr_pix, ch.pixel_mod, "On")
         fr_chroma = ttk.Frame(tab_bonus)
-        fr_chroma.pack(fill=tk.X, pady=2)
+        fr_chroma.pack(fill=tk.X, pady=5)
         ttk.Label(fr_chroma, text="Chroma LFO:").pack(side=tk.LEFT)
         c['chroma_mod'] = self.setup_mod_simple(fr_chroma, ch.chroma_mod, "On")
 
         fr_kaleido = ttk.Frame(tab_bonus)
-        fr_kaleido.pack(fill=tk.X, pady=2)
+        fr_kaleido.pack(fill=tk.X, pady=5)
         ttk.Label(fr_kaleido, text="Kaleid:").pack(side=tk.LEFT)
         c['kaleidoscope'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_kaleido, from_=0.0, to=1.0, variable=c['kaleidoscope'], length=80, 
@@ -3308,7 +3308,7 @@ class VideoMixer:
         c['kaleidoscope_mod'] = self.setup_mod_simple(fr_kaleido, ch.kaleidoscope_mod, "LFO")
 
         fr_vignette = ttk.Frame(tab_bonus)
-        fr_vignette.pack(fill=tk.X, pady=2)
+        fr_vignette.pack(fill=tk.X, pady=5)
         ttk.Label(fr_vignette, text="Vignette:").pack(side=tk.LEFT)
         c['vignette'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_vignette, from_=0.0, to=1.0, variable=c['vignette'], length=80,
@@ -3316,7 +3316,7 @@ class VideoMixer:
         c['vignette_mod'] = self.setup_mod_simple(fr_vignette, ch.vignette_mod, "LFO")
 
         fr_vignette_trans = ttk.Frame(tab_bonus)
-        fr_vignette_trans.pack(fill=tk.X, pady=2)
+        fr_vignette_trans.pack(fill=tk.X, pady=5)
         ttk.Label(fr_vignette_trans, text="Vig Trans:").pack(side=tk.LEFT)
         c['vignette_transparency'] = tk.DoubleVar(value=0.5)
         ttk.Scale(fr_vignette_trans, from_=0.0, to=1.0, variable=c['vignette_transparency'], length=80,
@@ -3326,7 +3326,7 @@ class VideoMixer:
         c['vignette_transparency'].trace_add('write', lambda *args: c['vignette_trans_lbl'].config(text=f"{c['vignette_transparency'].get():.2f}"))
 
         fr_colorshift = ttk.Frame(tab_bonus)
-        fr_colorshift.pack(fill=tk.X, pady=2)
+        fr_colorshift.pack(fill=tk.X, pady=5)
         ttk.Label(fr_colorshift, text="ColorShift:").pack(side=tk.LEFT)
         c['color_shift'] = tk.DoubleVar(value=0.0)
         ttk.Scale(fr_colorshift, from_=-1.0, to=1.0, variable=c['color_shift'], length=80,
