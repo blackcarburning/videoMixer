@@ -4461,9 +4461,16 @@ class VideoMixer:
             print(f"Loop start beats: {loop_start_beats}")
             
             # Calculate audio start offset in seconds based on loop_start_beats
-            beat_duration_sec = 60.0 / self.bpm
+            # Ensure BPM is valid to avoid division by zero
+            if self.bpm <= 0:
+                print(f"Warning: Invalid BPM ({self.bpm}), using default 120 BPM")
+                bpm_for_calc = 120.0
+            else:
+                bpm_for_calc = self.bpm
+            
+            beat_duration_sec = 60.0 / bpm_for_calc
             audio_start_offset_sec = loop_start_beats * beat_duration_sec
-            print(f"BPM: {self.bpm}, Beat duration: {beat_duration_sec:.3f}s")
+            print(f"BPM: {bpm_for_calc}, Beat duration: {beat_duration_sec:.3f}s")
             print(f"Audio start offset: {audio_start_offset_sec:.3f}s")
             
             # Get recording metrics
