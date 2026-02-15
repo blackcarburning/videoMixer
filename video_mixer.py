@@ -4265,23 +4265,14 @@ class VideoMixer:
                 self.audio_track.stop()
                 self.sync_ready = False
             
-            # Reset to beat 0 and start playback
+            # Start playback
             self.playing = True
             self.play_btn.config(text="Pause")
             if not self.processor.is_alive():
                 self.processor = VideoProcessor(self)
             
-            # Force global loop start to 0 for recording
-            old_loop_start = self.global_loop_start
-            self.global_loop_start = 0
-            self.gloop_start.set(0)
-            
-            # Start playback from beat 0
+            # Start playback from user's loop point
             self.sync_start()
-            
-            # Restore loop start (user might want it for after recording)
-            self.global_loop_start = old_loop_start
-            self.gloop_start.set(old_loop_start)
             
             # Now actually start the recording
             self.begin_actual_recording()
