@@ -4497,8 +4497,8 @@ class VideoMixer:
                 audio_start_ms = recording_metrics.get('audio_start_ms')
                 audio_end_ms = recording_metrics.get('audio_end_ms')
                 
-                # Validate that we have valid audio positions (both must be set and end >= start)
-                if audio_start_ms is not None and audio_end_ms is not None and audio_end_ms >= audio_start_ms:
+                # Validate that we have valid audio positions (both must be set and end > start for valid duration)
+                if audio_start_ms is not None and audio_end_ms is not None and audio_end_ms > audio_start_ms:
                     audio_segment_start_sec = audio_start_ms / 1000.0
                     audio_segment_duration_sec = (audio_end_ms - audio_start_ms) / 1000.0
                     print(f"=== Actual Audio Segment ===")
@@ -4574,8 +4574,8 @@ class VideoMixer:
                 print(f"Using actual audio segment: start={audio_ss:.3f}s, duration={audio_duration:.3f}s")
             else:
                 audio_ss = audio_start_offset_sec
-                audio_duration = None  # Will use -shortest to match video duration
-                print(f"Using loop-based audio offset: start={audio_ss:.3f}s (no duration limit)")
+                audio_duration = None  # No explicit duration limit; ffmpeg -shortest will trim to video length
+                print(f"Using loop-based audio offset: start={audio_ss:.3f}s (duration limited by -shortest)")
             
             # Build ffmpeg command based on output format
             if output_format == 'mp4':
