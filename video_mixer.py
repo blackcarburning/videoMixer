@@ -373,7 +373,7 @@ class VideoChannel:
     DEFAULT_BPM = 120.0
     MIN_ENVELOPE_TIME = 0.01
     DEFAULT_ENVELOPE_TIME = 0.05
-    GATE_TIMEBASE_VALUES = {"1/4": 0.25, "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0}
+    GATE_TIMEBASE_VALUES = {"1/4": 0.25, "1/2": 0.5, "1": 1.0, "2": 2.0, "4": 4.0, "8": 8.0, "16": 16.0}
     
     # Sequencer constants
     STEPS_PER_BAR = 16
@@ -1804,23 +1804,27 @@ class SequencerWidget(tk.Canvas):
         self.attr_name = attr_name
         self.mode = mode 
         self.rects = []
+        self.current_step_indicator = None  # Add this line
         self.bind("<Button-1>", self.on_click)
         if self.mode == "toggle": self.colors = ["#444", "#0f0"]
         elif self.mode == "multi_speed": self.colors = ["#444", "#ff0", "#00f", "#f00", "#000"]
         elif self.mode == "multi_jump": self.colors = ["#444", "#ff0", "#f00"] 
         w = 15
         h = 20
+        self.step_width = w  # Store for later use
         self.width = w * 16
-        self.configure(width=self.width + 50)
-        self.create_text(25, 12, text=label, fill="white", anchor="e", font=("Arial", 8))
-        start_x = 30
+        self.configure(width=self.width + 120)  # More space for labels
+        self.create_text(55, 12, text=label, fill="white", anchor="e", font=("Arial", 8))
+        self.start_x = 60  # More space before sequencer grid
         for i in range(16):
-            x = start_x + i * w
+            x = self.start_x + i * w
             val = self.get_step(i)
             if val >= len(self.colors): val = 0
             r = self.create_rectangle(x, 2, x + w - 1, 2 + h, fill=self.colors[val], outline="black")
             self.rects.append(r)
             if i % 4 == 0: self.create_line(x, 0, x, 25, fill="#777")
+        # Create step indicator (initially hidden)
+        self.current_step_indicator = self.create_rectangle(0, 0, 0, 0, outline="#00ffff", width=2)
 
     def get_step(self, idx):
         """Get step value directly from channel - avoids stale references"""
@@ -1836,10 +1840,20 @@ class SequencerWidget(tk.Canvas):
             raise ValueError(f"Sequencer step value {value} must be an integer between 0-4")
         getattr(self.channel, self.attr_name)[idx] = value
 
+    # Add new method to update current step indicator
+    def set_current_step(self, step_idx):
+        """Update the visual indicator for the current playing step"""
+        if self.current_step_indicator is not None and 0 <= step_idx < 16:
+            x = self.start_x + step_idx * self.step_width
+            self.coords(self.current_step_indicator, x-1, 0, x + self.step_width, 24)
+        elif self.current_step_indicator is not None:
+            # Hide indicator if step is out of range
+            self.coords(self.current_step_indicator, 0, 0, 0, 0)
+
     def on_click(self, event):
-        x = event.x - 30
+        x = event.x - self.start_x  # Use stored start_x instead of hardcoded 30
         if x < 0: return
-        idx = x // 15
+        idx = x // self.step_width  # Use stored step_width instead of hardcoded 15
         if 0 <= idx < 16:
             current = self.get_step(idx)
             nxt = (current + 1) % len(self.colors)
@@ -3416,10 +3430,28 @@ class VideoMixer:
         
         c['seq_stutter_w'] = SequencerWidget(tab_seq, ch, 'seq_stutter', "Stutter", "toggle")
         c['seq_stutter_w'].pack(pady=5)
-        c['seq_speed_w'] = SequencerWidget(tab_seq, ch, 'seq_speed', "Speed (G=1x,Y=2x,B=.5,R=Rev)", "multi_speed")
+        c['seq_speed_w'] = SequencerWidget(tab_seq, ch, 'seq_speed', "Speed", "multi_speed")
         c['seq_speed_w'].pack(pady=5)
-        c['seq_jump_w'] = SequencerWidget(tab_seq, ch, 'seq_jump', "Jump (Y=-1bt, R=-1bar)", "multi_jump")
+        c['seq_jump_w'] = SequencerWidget(tab_seq, ch, 'seq_jump', "Jump", "multi_jump")
         c['seq_jump_w'].pack(pady=5)
+        
+        # SEQ Help Section
+        ttk.Separator(tab_seq, orient='horizontal').pack(fill=tk.X, pady=10)
+        help_frame = ttk.Frame(tab_seq)
+        help_frame.pack(fill=tk.X, pady=5)
+
+        help_text = """Controls:
+• Gate: Toggle steps ON (green) / OFF (gray) - controls visibility
+• Stutter: Toggle steps to freeze frame (green = freeze)
+• Speed: Gray=1x, Yellow=2x, Blue=0.5x, Red=Reverse, Black=Freeze
+• Jump: Gray=None, Yellow=Jump back 1 beat, Red=Jump back 1 bar
+
+Timebase: Sets how many beats the 16 steps span (e.g., 4 = 1 bar)
+Envelope: Attack/Decay fade for gate transitions
+Snare: Plays drum hit on gate-on steps"""
+
+        help_label = ttk.Label(help_frame, text=help_text, font=("Arial", 8), justify=tk.LEFT, foreground="#aaaaaa")
+        help_label.pack(anchor=tk.W, padx=5)
         
         # DIS (Disintegration) Tab
         # Helper function to create a disintegration effect control
@@ -4059,6 +4091,17 @@ class VideoMixer:
                     self.beat_position = bp
                     self.beat_var.set(f"Beat: {int(round(bp))}")
                     self.beat_flash.configure(bg="white" if bp % 1 < 0.1 else "gray")
+                    
+                    # Update sequencer step indicators
+                    if hasattr(self, 'ch_a') and hasattr(self, 'ch_b'):
+                        current_step_a = self.channel_a._get_gate_step(bp)
+                        current_step_b = self.channel_b._get_gate_step(bp)
+                        for seq_widget_key in ['seq_gate_w', 'seq_stutter_w', 'seq_speed_w', 'seq_jump_w']:
+                            if seq_widget_key in self.ch_a:
+                                self.ch_a[seq_widget_key].set_current_step(current_step_a)
+                            if seq_widget_key in self.ch_b:
+                                self.ch_b[seq_widget_key].set_current_step(current_step_b)
+                    
                     rgb = blended[:, :, ::-1]
                     img = Image.fromarray(rgb)
                     self.preview_photo = ImageTk.PhotoImage(img)
