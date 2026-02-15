@@ -2556,6 +2556,7 @@ class VideoMixer:
         self.metronome_state_before_recording = False
         self.recording_output_path = None
         self.last_rendered_frame = None  # Cache last frame for FrameRecorder
+        self.recording_loop_start_beats = 0  # Store loop start position when recording begins
         
         self.setup_ui()
         self.update_loop()
@@ -4315,6 +4316,9 @@ class VideoMixer:
     def begin_actual_recording(self):
         """Actually start the recording after countdown."""
         try:
+            # Store the loop start position when recording begins
+            self.recording_loop_start_beats = self.global_loop_start
+            
             # Get FPS from the dropdown selection
             fps = int(self.record_fps.get())
             
@@ -4410,7 +4414,7 @@ class VideoMixer:
                     print("Starting audio muxing thread...")
                     self.status.set("Adding audio to recording...")
                     threading.Thread(target=self.mux_audio_to_video, 
-                                   args=(output_path, self.audio_track.path, recording_metrics), 
+                                   args=(output_path, self.audio_track.path, recording_metrics, self.recording_loop_start_beats), 
                                    daemon=True).start()
                 else:
                     # No audio to add - rename temp file to final format
@@ -4442,7 +4446,7 @@ class VideoMixer:
             self.metro_var.set(self.metronome_state_before_recording)
             self.metronome.enabled = self.metronome_state_before_recording
     
-    def mux_audio_to_video(self, video_path, audio_path, recording_metrics=None):
+    def mux_audio_to_video(self, video_path, audio_path, recording_metrics=None, loop_start_beats=0):
         """Add audio track to the recorded video using ffmpeg."""
         import subprocess
         import sys
@@ -4454,6 +4458,13 @@ class VideoMixer:
             print(f"Video temp path: {video_path}")
             print(f"Audio file exists: {os.path.exists(audio_path)}")
             print(f"Video file exists: {os.path.exists(video_path)}")
+            print(f"Loop start beats: {loop_start_beats}")
+            
+            # Calculate audio start offset in seconds based on loop_start_beats
+            beat_duration_sec = 60.0 / self.bpm
+            audio_start_offset_sec = loop_start_beats * beat_duration_sec
+            print(f"BPM: {self.bpm}, Beat duration: {beat_duration_sec:.3f}s")
+            print(f"Audio start offset: {audio_start_offset_sec:.3f}s")
             
             # Get recording metrics
             if recording_metrics:
@@ -4520,7 +4531,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-itsoffset', '0',  # Ensure audio starts at 0
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
@@ -4536,7 +4547,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-itsoffset', '0',  # Ensure audio starts at 0
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
@@ -4550,7 +4561,7 @@ class VideoMixer:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-itsoffset', '0',  # Ensure audio starts at 0
+                    '-ss', str(audio_start_offset_sec),  # Seek into audio file
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
