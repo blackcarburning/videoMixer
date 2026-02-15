@@ -2557,6 +2557,7 @@ class VideoMixer:
         self.recording_output_path = None
         self.last_rendered_frame = None  # Cache last frame for FrameRecorder
         self.recording_loop_start_beats = 0  # Store loop start position when recording begins
+        self.recording_audio_start_ms = 0  # Store actual audio position when recording starts
         
         self.setup_ui()
         self.update_loop()
@@ -4333,6 +4334,13 @@ class VideoMixer:
             self.recording_thread.start()
             
             self.recording = True
+            
+            # Store actual audio position when recording starts
+            if self.audio_track.enabled and self.audio_track.playing:
+                self.recording_audio_start_ms = self.audio_track.get_time_ms()
+            else:
+                self.recording_audio_start_ms = 0
+            
             self.record_btn.config(text="⬛ Stop Rec", bg=self.THEME_COLORS['red'])
             self.recording_indicator.config(bg=self.THEME_COLORS['red'])
             self.status.set(f"Recording to: {os.path.basename(self.recording_output_path)}")
@@ -4389,12 +4397,19 @@ class VideoMixer:
                 if os.path.exists(output_path):
                     print(f"Video file size: {os.path.getsize(output_path)} bytes")
                 
+                # Capture audio end position
+                recording_audio_end_ms = 0
+                if self.audio_track.enabled and self.audio_track.playing:
+                    recording_audio_end_ms = self.audio_track.get_time_ms()
+                
                 # Store metrics for muxing
                 recording_metrics = {
                     'frame_count': recorded_frame_count,
                     'actual_duration': actual_duration,
                     'actual_fps': actual_fps,
-                    'declared_fps': declared_fps
+                    'declared_fps': declared_fps,
+                    'audio_start_ms': self.recording_audio_start_ms,
+                    'audio_end_ms': recording_audio_end_ms
                 }
                 
                 self.recording_thread = None
@@ -4472,7 +4487,23 @@ class VideoMixer:
             beat_duration_sec = 60.0 / bpm_for_calc
             audio_start_offset_sec = loop_start_beats * beat_duration_sec
             print(f"BPM: {bpm_for_calc}, Beat duration: {beat_duration_sec:.3f}s")
-            print(f"Audio start offset: {audio_start_offset_sec:.3f}s")
+            print(f"Audio start offset (from loop_start_beats): {audio_start_offset_sec:.3f}s")
+            
+            # Get actual audio segment times from recording metrics
+            audio_segment_start_sec = None
+            audio_segment_duration_sec = None
+            
+            if recording_metrics:
+                audio_start_ms = recording_metrics.get('audio_start_ms', 0)
+                audio_end_ms = recording_metrics.get('audio_end_ms', 0)
+                
+                if audio_start_ms > 0 or audio_end_ms > 0:
+                    audio_segment_start_sec = audio_start_ms / 1000.0
+                    audio_segment_duration_sec = (audio_end_ms - audio_start_ms) / 1000.0
+                    print(f"=== Actual Audio Segment ===")
+                    print(f"Audio start position: {audio_start_ms}ms ({audio_segment_start_sec:.3f}s)")
+                    print(f"Audio end position: {audio_end_ms}ms ({audio_end_ms / 1000.0:.3f}s)")
+                    print(f"Audio segment duration: {audio_segment_duration_sec:.3f}s")
             
             # Get recording metrics
             if recording_metrics:
@@ -4534,12 +4565,27 @@ class VideoMixer:
             print(f"Final output path: {output_with_audio}")
             print(f"Starting audio mux with ffmpeg...")
             
+            # Determine which audio seek/duration to use
+            # If we have actual audio segment times, use those; otherwise fall back to loop_start_beats
+            if audio_segment_start_sec is not None and audio_segment_duration_sec is not None:
+                audio_ss = audio_segment_start_sec
+                audio_duration = audio_segment_duration_sec
+                print(f"Using actual audio segment: start={audio_ss:.3f}s, duration={audio_duration:.3f}s")
+            else:
+                audio_ss = audio_start_offset_sec
+                audio_duration = None  # Will use -shortest to match video duration
+                print(f"Using loop-based audio offset: start={audio_ss:.3f}s (no duration limit)")
+            
             # Build ffmpeg command based on output format
             if output_format == 'mp4':
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
+                    '-ss', str(audio_ss),  # Seek into audio to match recording start position
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
+                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
@@ -4550,12 +4596,16 @@ class VideoMixer:
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
-                ]
+                ])
             elif output_format == 'mov':
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
+                    '-ss', str(audio_ss),  # Seek into audio to match recording start position
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
+                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
@@ -4564,12 +4614,16 @@ class VideoMixer:
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
-                ]
+                ])
             else:  # avi
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
-                    '-ss', str(audio_start_offset_sec),  # Seek into audio to match loop start position
+                    '-ss', str(audio_ss),  # Seek into audio to match recording start position
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
+                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
@@ -4578,7 +4632,7 @@ class VideoMixer:
                     '-async', '1',  # Audio sync
                     '-shortest',
                     output_with_audio
-                ]
+                ])
             
             # Run ffmpeg
             result = subprocess.run(cmd, capture_output=True, text=True)
