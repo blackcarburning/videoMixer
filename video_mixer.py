@@ -2575,7 +2575,7 @@ class VideoMixer:
         
         self.bpm = 120.0
         self.beats_per_bar = 4
-        self.mix = 0.5
+        self.mix = 0.0  # Default to fully channel A
         self.mix_mod = Modulator()
         self.blend_mode = "normal"
         self.playing = False
@@ -2662,8 +2662,8 @@ class VideoMixer:
             c['seq_stutter_w'].update_ui()
             c['seq_speed_w'].update_ui()
             c['seq_jump_w'].update_ui()
-        self.mix_var.set(0.5)
-        self.mix = 0.5
+        self.mix_var.set(0.0)  # Default to fully channel A
+        self.mix = 0.0  # Default to fully channel A
         self.mix_mod.reset()
         self.reset_mod(self.mix_mod_c)
         self.blend_var.set("normal")
@@ -2723,8 +2723,8 @@ class VideoMixer:
             self.update_ch_ui(ch, c)
         
         # Reset mixer parameters
-        self.mix_var.set(0.5)
-        self.mix = 0.5
+        self.mix_var.set(0.0)  # Default to fully channel A
+        self.mix = 0.0  # Default to fully channel A
         self.mix_mod.reset()
         self.reset_mod(self.mix_mod_c)
         self.blend_var.set("normal")
@@ -3042,7 +3042,7 @@ class VideoMixer:
         row4 = ttk.Frame(tf)
         row4.pack(fill=tk.X, pady=2)
         ttk.Label(row4, text="A", font=("Arial", 11, "bold")).pack(side=tk.LEFT)
-        self.mix_var = tk.DoubleVar(value=0.5)
+        self.mix_var = tk.DoubleVar(value=0.0)  # Default to fully channel A
         ttk.Scale(row4, from_=0, to=1, variable=self.mix_var, command=lambda v: setattr(self, 'mix', float(v)), length=150).pack(side=tk.LEFT, padx=3)
         ttk.Label(row4, text="B", font=("Arial", 11, "bold")).pack(side=tk.LEFT)
         self.mix_mod_c = self.setup_mod(row4, self.mix_mod, "Mix")
