@@ -1687,7 +1687,7 @@ class VideoChannel:
             frame = cv2.GaussianBlur(frame, (k, k), 0)
 
         # Manual Zoom and Pan (combined to prevent black edges when zoomed)
-        manual_zoom_scale = 1.0 + self.manual_zoom  # manual_zoom of 0 = 1x, 1 = 2x scale
+        manual_zoom_scale = 1.0 + self.manual_zoom * 2.0  # Max 3x zoom
         if manual_zoom_scale > 1.0 or self.pan_x != 0.0 or self.pan_y != 0.0:
             frame = frame.copy()
             h, w = frame.shape[:2]
@@ -1695,7 +1695,6 @@ class VideoChannel:
             # Calculate the maximum pan range based on zoom level
             # When zoomed, there's extra content that can be revealed
             # At 2x zoom, we can pan up to 50% of the frame in each direction
-            # The formula: max_pan = (zoom_scale - 1) / zoom_scale * 0.5
             if manual_zoom_scale > 1.0:
                 max_pan_ratio = (manual_zoom_scale - 1.0) / manual_zoom_scale
             else:
