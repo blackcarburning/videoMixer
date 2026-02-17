@@ -1686,23 +1686,37 @@ class VideoChannel:
             k = int(self.manual_blur * 50) * 2 + 1
             frame = cv2.GaussianBlur(frame, (k, k), 0)
 
-        # Manual Zoom
-        if self.manual_zoom > 0:
+        # Manual Zoom and Pan (combined to prevent black edges when zoomed)
+        manual_zoom_scale = 1.0 + self.manual_zoom * 2.0  # Max 3x zoom
+        if manual_zoom_scale > 1.0 or self.pan_x != 0.0 or self.pan_y != 0.0:
             frame = frame.copy()
             h, w = frame.shape[:2]
-            scale = 1.0 + self.manual_zoom * 2.0  # Max 3x zoom
-            M = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
-            frame = cv2.warpAffine(frame, M, (w, h))
-
-        # Manual Pan (translate frame)
-        if self.pan_x != 0.0 or self.pan_y != 0.0:
-            frame = frame.copy()
-            h, w = frame.shape[:2]
-            # Calculate pixel offset (pan range -1 to 1 maps to -50% to +50% of dimension)
-            offset_x = int(self.pan_x * w * 0.5)
-            offset_y = int(self.pan_y * h * 0.5)
-            # Create translation matrix
-            M = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
+            
+            # Calculate the maximum pan range based on zoom level
+            # When zoomed, there's extra content that can be revealed
+            # At 2x zoom, we can pan up to 50% of the frame in each direction
+            if manual_zoom_scale > 1.0:
+                max_pan_ratio = (manual_zoom_scale - 1.0) / manual_zoom_scale
+            else:
+                max_pan_ratio = 0.0  # No panning allowed if not zoomed (would show black)
+            
+            # Calculate pan offset in pixels, clamped to available range
+            # pan_x/pan_y range is -1 to 1, map to available pan range
+            pan_x_clamped = max(-1.0, min(1.0, self.pan_x))
+            pan_y_clamped = max(-1.0, min(1.0, self.pan_y))
+            
+            offset_x = pan_x_clamped * max_pan_ratio * w
+            offset_y = pan_y_clamped * max_pan_ratio * h
+            
+            # Create combined transformation matrix for zoom + pan
+            # The trick: we zoom around the center, then translate
+            center_x, center_y = w / 2, h / 2
+            
+            # Build transformation: translate to origin, scale, translate back with pan offset
+            # M = T(center + pan) * S(scale) * T(-center)
+            # This scales around center then shifts the view
+            M = cv2.getRotationMatrix2D((center_x - offset_x, center_y - offset_y), 0, manual_zoom_scale)
+            
             frame = cv2.warpAffine(frame, M, (w, h))
 
         # Manual Posterize
