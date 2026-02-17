@@ -537,6 +537,8 @@ class VideoChannel:
         self.manual_zoom = 0.0
         self.manual_posterize = 0
         self.manual_invert = False
+        self.pan_x = 0.0  # Pan left/right: -1.0 (left) to 1.0 (right), 0.0 = center
+        self.pan_y = 0.0  # Pan up/down: -1.0 (up) to 1.0 (down), 0.0 = center
         
         # Camera Shake
         self.shake_amount = 0.0
@@ -657,6 +659,7 @@ class VideoChannel:
              'dis_rain_trigger_duration': self.dis_rain_trigger_duration,
              'manual_blur': self.manual_blur, 'manual_zoom': self.manual_zoom,
              'manual_posterize': self.manual_posterize, 'manual_invert': self.manual_invert,
+             'pan_x': self.pan_x, 'pan_y': self.pan_y,
              'shake_amount': self.shake_amount, 'shake_horizontal': self.shake_horizontal,
              'shake_vertical': self.shake_vertical, 'shake_tilt': self.shake_tilt,
              'shake_zoom': self.shake_zoom, 'shake_blur': self.shake_blur,
@@ -731,6 +734,8 @@ class VideoChannel:
             self.manual_zoom = d.get('manual_zoom', 0.0)
             self.manual_posterize = d.get('manual_posterize', 0)
             self.manual_invert = d.get('manual_invert', False)
+            self.pan_x = d.get('pan_x', 0.0)
+            self.pan_y = d.get('pan_y', 0.0)
             
             self.shake_amount = d.get('shake_amount', 0.0)
             self.shake_horizontal = d.get('shake_horizontal', 0.0)
@@ -939,6 +944,8 @@ class VideoChannel:
             self.manual_zoom = 0.0
             self.manual_posterize = 0
             self.manual_invert = False
+            self.pan_x = 0.0
+            self.pan_y = 0.0
             
             self.shake_amount = 0.0
             self.shake_horizontal = 0.0
@@ -1685,6 +1692,17 @@ class VideoChannel:
             h, w = frame.shape[:2]
             scale = 1.0 + self.manual_zoom * 2.0  # Max 3x zoom
             M = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
+            frame = cv2.warpAffine(frame, M, (w, h))
+
+        # Manual Pan (translate frame)
+        if self.pan_x != 0.0 or self.pan_y != 0.0:
+            frame = frame.copy()
+            h, w = frame.shape[:2]
+            # Calculate pixel offset (pan range -1 to 1 maps to -50% to +50% of dimension)
+            offset_x = int(self.pan_x * w * 0.5)
+            offset_y = int(self.pan_y * h * 0.5)
+            # Create translation matrix
+            M = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
             frame = cv2.warpAffine(frame, M, (w, h))
 
         # Manual Posterize
@@ -3666,6 +3684,30 @@ class VideoMixer:
         ttk.Checkbutton(fr_man_invert, text="Invert Colors", variable=c['manual_invert'],
                        command=lambda: setattr(ch, 'manual_invert', c['manual_invert'].get())).pack(side=tk.LEFT, padx=5)
         
+        # Pan Controls Section
+        ttk.Separator(tab_man, orient='horizontal').pack(fill=tk.X, pady=5)
+        ttk.Label(tab_man, text="Pan", font=("Arial", 9, "bold")).pack(anchor=tk.W)
+
+        # Pan X (Left/Right) and Pan Y (Up/Down) on same row for compact layout
+        fr_pan = ttk.Frame(tab_man)
+        fr_pan.pack(fill=tk.X, pady=2)
+
+        ttk.Label(fr_pan, text="L/R:", width=4).pack(side=tk.LEFT)
+        c['pan_x'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_pan, from_=-1.0, to=1.0, variable=c['pan_x'], length=80,
+                 command=lambda v, ch=ch: setattr(ch, 'pan_x', float(v))).pack(side=tk.LEFT)
+        c['pan_x_lbl'] = ttk.Label(fr_pan, text="0.00", width=5)
+        c['pan_x_lbl'].pack(side=tk.LEFT)
+        c['pan_x'].trace_add('write', lambda *args: c['pan_x_lbl'].config(text=f"{c['pan_x'].get():.2f}"))
+
+        ttk.Label(fr_pan, text="  U/D:", width=5).pack(side=tk.LEFT)
+        c['pan_y'] = tk.DoubleVar(value=0.0)
+        ttk.Scale(fr_pan, from_=-1.0, to=1.0, variable=c['pan_y'], length=80,
+                 command=lambda v, ch=ch: setattr(ch, 'pan_y', float(v))).pack(side=tk.LEFT)
+        c['pan_y_lbl'] = ttk.Label(fr_pan, text="0.00", width=5)
+        c['pan_y_lbl'].pack(side=tk.LEFT)
+        c['pan_y'].trace_add('write', lambda *args: c['pan_y_lbl'].config(text=f"{c['pan_y'].get():.2f}"))
+        
         # Camera Shake Section
         ttk.Separator(tab_man, orient='horizontal').pack(fill=tk.X, pady=5)
         ttk.Label(tab_man, text="Camera Shake", font=("Arial", 9, "bold")).pack(anchor=tk.W)
@@ -3967,6 +4009,10 @@ class VideoMixer:
             c['manual_posterize'].set(ch.manual_posterize)
         if 'manual_invert' in c:
             c['manual_invert'].set(ch.manual_invert)
+        if 'pan_x' in c:
+            c['pan_x'].set(ch.pan_x)
+        if 'pan_y' in c:
+            c['pan_y'].set(ch.pan_y)
         
         # Update Camera Shake controls
         if 'shake_amount' in c:
