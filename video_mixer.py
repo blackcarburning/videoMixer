@@ -399,12 +399,14 @@ class VideoChannel:
         self.strobe_color = "white"
         self.posterize_rate = 0.0
         self.mirror_mode = "Off"
+        self.mirror_enabled = True  # Whether mirror effect is active
         self.mosh_amount = 0.0
         self.mosh_buffer = None
         self.seq_gate = [1] * 16
         self.seq_stutter = [0] * 16
         self.seq_speed = [0] * 16
         self.seq_jump = [0] * 16
+        self.sequencer_enabled = True  # Whether stutter/speed/jump sequencer is active
         self.gate_enabled = True
         self.gate_snare_enabled = False
         self.gate_envelope_enabled = False
@@ -609,12 +611,14 @@ class VideoChannel:
              'speed': self.speed, 'opacity': self.opacity, 'loop': self.loop,
              'reverse': self.reverse, 'glitch_rate': self.glitch_rate,
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
-             'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mosh_amount': self.mosh_amount,
+             'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mirror_enabled': self.mirror_enabled,
+             'mosh_amount': self.mosh_amount,
              'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
              'kaleidoscope_amount': self.kaleidoscope_amount, 'vignette_amount': self.vignette_amount,
              'vignette_transparency': self.vignette_transparency, 'color_shift_amount': self.color_shift_amount,
              'seq_gate': self.seq_gate, 'seq_stutter': self.seq_stutter, 
              'seq_speed': self.seq_speed, 'seq_jump': self.seq_jump,
+             'sequencer_enabled': self.sequencer_enabled,
              'gate_enabled': self.gate_enabled, 'gate_snare_enabled': self.gate_snare_enabled, 'gate_envelope_enabled': self.gate_envelope_enabled,
              'gate_attack': self.gate_attack, 'gate_decay': self.gate_decay, 'gate_timebase': self.gate_timebase,
              'beat_loop_enabled': self.beat_loop_enabled, 
@@ -683,6 +687,7 @@ class VideoChannel:
             self.strobe_color = d.get('strobe_color', 'white')
             self.posterize_rate = d.get('posterize_rate', 0.0)
             self.mirror_mode = d.get('mirror_mode', "Off")
+            self.mirror_enabled = d.get('mirror_enabled', True)
             self.mosh_amount = d.get('mosh_amount', 0.0)
             self.echo_amount = d.get('echo_amount', 0.0)
             self.slicer_amount = d.get('slicer_amount', 0.0)
@@ -749,6 +754,7 @@ class VideoChannel:
             self.seq_stutter = d.get('seq_stutter', [0]*16)
             self.seq_speed = d.get('seq_speed', [0]*16)
             self.seq_jump = d.get('seq_jump', [0]*16)
+            self.sequencer_enabled = d.get('sequencer_enabled', True)
             self.gate_enabled = d.get('gate_enabled', True)
             self.gate_snare_enabled = d.get('gate_snare_enabled', False)
             self.gate_envelope_enabled = d.get('gate_envelope_enabled', False)
@@ -810,6 +816,7 @@ class VideoChannel:
             self.strobe_color = "white"
             self.posterize_rate = 0.0
             self.mirror_mode = "Off"
+            self.mirror_enabled = True
             self.mosh_amount = 0.0
             self.echo_amount = 0.0
             self.slicer_amount = 0.0
@@ -821,6 +828,7 @@ class VideoChannel:
             self.seq_stutter[:] = [0] * 16
             self.seq_speed[:] = [0] * 16
             self.seq_jump[:] = [0] * 16
+            self.sequencer_enabled = True
             self.gate_enabled = True
             self.gate_snare_enabled = False
             self.gate_envelope_enabled = False
@@ -968,6 +976,8 @@ class VideoChannel:
         return resized
     
     def _apply_mirror(self, frame, beat_pos, bpm, env_attack, env_release):
+        if not self.mirror_enabled:
+            return frame
         if self.mirror_mode == "Off":
             return frame
         
@@ -1246,10 +1256,16 @@ class VideoChannel:
                 # Calculate current sequencer step (16 steps per 4 beats = 1 bar)
                 seq_step = self._get_gate_step(beat_pos)
                 
-                # Get sequencer states for current step
-                is_stuttering = self.seq_stutter[seq_step]
-                spd_mod_idx = self.seq_speed[seq_step]
-                jmp_mod_idx = self.seq_jump[seq_step]
+                # Get sequencer states for current step (only if sequencer is enabled)
+                if self.sequencer_enabled:
+                    is_stuttering = self.seq_stutter[seq_step]
+                    spd_mod_idx = self.seq_speed[seq_step]
+                    jmp_mod_idx = self.seq_jump[seq_step]
+                else:
+                    # Sequencer disabled - use default values (no stutter, normal speed, no jump)
+                    is_stuttering = False
+                    spd_mod_idx = 0  # Normal speed
+                    jmp_mod_idx = 0  # No jump
                 
                 # Map speed sequencer values to multipliers with bounds checking
                 # 0=Gray (1x), 1=Yellow (2x), 2=Blue (0.5x), 3=Red (reverse), 4=Black (freeze)
@@ -3380,6 +3396,10 @@ class VideoMixer:
         scc.bind("<<ComboboxSelected>>", lambda e, ch=ch, v=c['strobe_col']: setattr(ch, 'strobe_color', v.get()))
         fr_mir = ttk.Frame(tab_fx)
         fr_mir.pack(fill=tk.X, pady=2)
+        # Mirror Enable checkbox
+        c['mirror_enabled'] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fr_mir, text="Enable", variable=c['mirror_enabled'],
+                       command=lambda: setattr(ch, 'mirror_enabled', c['mirror_enabled'].get())).pack(side=tk.LEFT)
         ttk.Label(fr_mir, text="Mirror:").pack(side=tk.LEFT)
         c['mirror_mode'] = tk.StringVar(value="Off")
         mc = ttk.Combobox(fr_mir, textvariable=c['mirror_mode'], values=VideoChannel.MIRROR_MODES, state="readonly", width=9)
@@ -3483,6 +3503,14 @@ class VideoMixer:
                   command=lambda v, ch=ch: setattr(ch, 'color_shift_amount', float(v))).pack(side=tk.LEFT)
         c['color_shift_mod'] = self.setup_mod_simple(fr_colorshift, ch.color_shift_mod, "LFO")
 
+        # Sequencer Enable checkbox - add at top of SEQ tab
+        fr_seq_enable = ttk.Frame(tab_seq)
+        fr_seq_enable.pack(fill=tk.X, pady=2)
+        c['sequencer_enabled'] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fr_seq_enable, text="Enable Sequencer", variable=c['sequencer_enabled'],
+                       command=lambda: setattr(ch, 'sequencer_enabled', c['sequencer_enabled'].get())).pack(side=tk.LEFT)
+        ttk.Separator(tab_seq, orient='horizontal').pack(fill=tk.X, pady=5)
+        
         # Gate enable checkbox
         gate_enable_frame = ttk.Frame(tab_seq)
         gate_enable_frame.pack(fill=tk.X, pady=2)
@@ -3922,6 +3950,8 @@ class VideoMixer:
                 c['post_rt'].set(label)
                 break
         c['mirror_mode'].set(ch.mirror_mode)
+        if 'mirror_enabled' in c:
+            c['mirror_enabled'].set(ch.mirror_enabled)
         c['mosh'].set(ch.mosh_amount)
         c['echo'].set(ch.echo_amount)
         c['slicer'].set(ch.slicer_amount)
@@ -3979,6 +4009,8 @@ class VideoMixer:
         c['seq_speed_w'].update_ui()
         c['seq_jump_w'].update_ui()
         # Update gate sequencer controls
+        if 'sequencer_enabled' in c:
+            c['sequencer_enabled'].set(ch.sequencer_enabled)
         if 'gate_enabled' in c:
             c['gate_enabled'].set(ch.gate_enabled)
         if 'gate_snare' in c:
