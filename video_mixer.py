@@ -400,7 +400,6 @@ class VideoChannel:
         self.posterize_rate = 0.0
         self.mirror_mode = "Off"
         self.mirror_enabled = True  # Whether mirror effect is active
-        self.mirror_mode_saved = "Off"  # Stores the mirror mode when checkbox is unchecked
         self.mosh_amount = 0.0
         self.mosh_buffer = None
         self.seq_gate = [1] * 16
@@ -613,7 +612,6 @@ class VideoChannel:
              'reverse': self.reverse, 'glitch_rate': self.glitch_rate,
              'strobe_enabled': self.strobe_enabled, 'strobe_rate': self.strobe_rate, 'strobe_color': self.strobe_color,
              'posterize_rate': self.posterize_rate, 'mirror_mode': self.mirror_mode, 'mirror_enabled': self.mirror_enabled,
-             'mirror_mode_saved': self.mirror_mode_saved,
              'mosh_amount': self.mosh_amount,
              'echo_amount': self.echo_amount, 'slicer_amount': self.slicer_amount,
              'kaleidoscope_amount': self.kaleidoscope_amount, 'vignette_amount': self.vignette_amount,
@@ -690,7 +688,6 @@ class VideoChannel:
             self.posterize_rate = d.get('posterize_rate', 0.0)
             self.mirror_mode = d.get('mirror_mode', "Off")
             self.mirror_enabled = d.get('mirror_enabled', True)
-            self.mirror_mode_saved = d.get('mirror_mode_saved', 'Off')
             self.mosh_amount = d.get('mosh_amount', 0.0)
             self.echo_amount = d.get('echo_amount', 0.0)
             self.slicer_amount = d.get('slicer_amount', 0.0)
@@ -820,7 +817,6 @@ class VideoChannel:
             self.posterize_rate = 0.0
             self.mirror_mode = "Off"
             self.mirror_enabled = True
-            self.mirror_mode_saved = "Off"
             self.mosh_amount = 0.0
             self.echo_amount = 0.0
             self.slicer_amount = 0.0
@@ -980,6 +976,8 @@ class VideoChannel:
         return resized
     
     def _apply_mirror(self, frame, beat_pos, bpm, env_attack, env_release):
+        if not self.mirror_enabled:
+            return frame
         if self.mirror_mode == "Off":
             return frame
         
@@ -3399,20 +3397,12 @@ class VideoMixer:
         fr_mir = ttk.Frame(tab_fx)
         fr_mir.pack(fill=tk.X, pady=2)
         # Mirror Enable checkbox
-        def toggle_mirror_enabled(ch=ch, c=c):
-            if c['mirror_enabled'].get():
-                # Re-enabling: restore saved mode
-                ch.mirror_mode = ch.mirror_mode_saved
-                c['mirror_mode'].set(ch.mirror_mode_saved)
-            else:
-                # Disabling: save current mode and set to Off
-                ch.mirror_mode_saved = ch.mirror_mode
-                ch.mirror_mode = "Off"
-                c['mirror_mode'].set("Off")
+        def on_mirror_enable_toggle(ch=ch, c=c):
+            ch.mirror_enabled = c['mirror_enabled'].get()
 
         c['mirror_enabled'] = tk.BooleanVar(value=True)
         ttk.Checkbutton(fr_mir, text="Enable", variable=c['mirror_enabled'],
-                       command=toggle_mirror_enabled).pack(side=tk.LEFT)
+                       command=on_mirror_enable_toggle).pack(side=tk.LEFT)
         ttk.Label(fr_mir, text="Mirror:").pack(side=tk.LEFT)
         c['mirror_mode'] = tk.StringVar(value="Off")
         mc = ttk.Combobox(fr_mir, textvariable=c['mirror_mode'], values=VideoChannel.MIRROR_MODES, state="readonly", width=9)
@@ -3964,7 +3954,7 @@ class VideoMixer:
                 break
         c['mirror_mode'].set(ch.mirror_mode)
         if 'mirror_enabled' in c:
-            c['mirror_enabled'].set(ch.mirror_mode != "Off")
+            c['mirror_enabled'].set(ch.mirror_enabled)
         c['mosh'].set(ch.mosh_amount)
         c['echo'].set(ch.echo_amount)
         c['slicer'].set(ch.slicer_amount)
