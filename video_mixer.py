@@ -3399,7 +3399,7 @@ class VideoMixer:
         # Mirror Enable checkbox
         c['mirror_enabled'] = tk.BooleanVar(value=True)
         ttk.Checkbutton(fr_mir, text="Enable", variable=c['mirror_enabled'],
-                       command=lambda: setattr(ch, 'mirror_enabled', c['mirror_enabled'].get())).pack(side=tk.LEFT)
+                       command=lambda ch=ch: setattr(ch, 'mirror_enabled', c['mirror_enabled'].get())).pack(side=tk.LEFT)
         ttk.Label(fr_mir, text="Mirror:").pack(side=tk.LEFT)
         c['mirror_mode'] = tk.StringVar(value="Off")
         mc = ttk.Combobox(fr_mir, textvariable=c['mirror_mode'], values=VideoChannel.MIRROR_MODES, state="readonly", width=9)
