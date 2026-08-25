@@ -70,6 +70,7 @@ The application requires:
 - `numpy`
 - `Pillow` (PIL)
 - `pygame` (includes pygame.sndarray for waveform extraction)
+- `ffmpeg` (optional, required only to mux recorded video with external audio)
 
 Install dependencies with:
 ```bash
