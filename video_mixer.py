@@ -1,16 +1,42 @@
 
-
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import types
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+    TK_AVAILABLE = True
+except ImportError:
+    TK_AVAILABLE = False
+    tk = types.SimpleNamespace(
+        Canvas=object,
+        Tk=object,
+        LEFT="left",
+        RIGHT="right",
+        BOTH="both",
+        X="x",
+        Y="y",
+        HORIZONTAL="horizontal",
+        VERTICAL="vertical",
+    )
+    ttk = types.SimpleNamespace()
+    filedialog = types.SimpleNamespace()
+    messagebox = types.SimpleNamespace()
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image
+try:
+    from PIL import ImageTk
+except Exception:
+    ImageTk = None
 import threading
 import time
 import os
 import json
 import traceback
 from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
+import math
+import wave
 try:
     import winsound
 except ImportError:
@@ -21,12 +47,41 @@ import ctypes
 import pygame
 import pygame.sndarray
 
+
+def _setup_logger():
+    logger = logging.getLogger("video_mixer")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    log_dir = os.path.join(
+        os.environ.get("APPDATA") or os.path.expanduser("~"),
+        "videoMixer",
+        "logs",
+    )
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "video_mixer.log")
+        handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+    except Exception:
+        logging.basicConfig(level=logging.INFO)
+    return logger
+
+
+LOGGER = _setup_logger()
+
 # --- PYGAME AUDIO ENGINE ---
 class NativeAudioEngine:
     def __init__(self):
+        self.available = True
         # Initialize pygame.mixer only if not already initialized
         if not pygame.mixer.get_init():
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+            try:
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+            except Exception:
+                LOGGER.exception("Failed to initialize pygame mixer")
+                self.available = False
         self.is_loaded = False
         self.duration_ms = 0
         self.is_paused = False
@@ -34,6 +89,8 @@ class NativeAudioEngine:
         self.pause_time_ms = 0
         
     def load(self, path):
+        if not self.available:
+            return False
         self.stop()
         self.close()
         try:
@@ -43,11 +100,11 @@ class NativeAudioEngine:
             try:
                 sound = pygame.mixer.Sound(path)
                 self.duration_ms = int(sound.get_length() * 1000)
-            except:
+            except Exception:
                 self.duration_ms = 0
             return True
         except Exception as e:
-            print(f"Failed to load audio: {e}")
+            LOGGER.warning("Failed to load audio: %s", e)
             self.is_loaded = False
             return False
 
@@ -59,7 +116,7 @@ class NativeAudioEngine:
             self.start_time_ms = from_ms
             self.is_paused = False
         except Exception as e:
-            print(f"Failed to play audio: {e}")
+            LOGGER.warning("Failed to play audio: %s", e)
 
     def is_playing(self):
         if not self.is_loaded:
@@ -72,9 +129,12 @@ class NativeAudioEngine:
         if self.is_paused:
             return self.pause_time_ms
         try:
-            pos_sec = pygame.mixer.music.get_pos() / 1000.0
+            pos_ms = pygame.mixer.music.get_pos()
+            if pos_ms < 0:
+                return self.start_time_ms
+            pos_sec = pos_ms / 1000.0
             return int(self.start_time_ms + pos_sec * 1000)
-        except:
+        except Exception:
             return 0
 
     def pause(self):
@@ -83,7 +143,7 @@ class NativeAudioEngine:
             try:
                 pos_sec = pygame.mixer.music.get_pos() / 1000.0
                 self.pause_time_ms = int(self.start_time_ms + pos_sec * 1000)
-            except:
+            except Exception:
                 self.pause_time_ms = 0
             pygame.mixer.music.pause()
             self.is_paused = True
@@ -148,11 +208,34 @@ class HighPrecisionMetronome:
         self.beats_per_bar = 4
         self.lock = threading.Lock()
         self.current_beat = -1.0
+        self._click_channel = None
+        self._high_click = None
+        self._low_click = None
+        self._init_click_sounds()
+
+    def _init_click_sounds(self):
+        try:
+            if not pygame.mixer.get_init():
+                return
+            self._click_channel = pygame.mixer.Channel(7)
+            self._high_click = self._make_click_sound(self.high_freq)
+            self._low_click = self._make_click_sound(self.low_freq)
+        except Exception:
+            LOGGER.exception("Failed to initialize metronome click sounds")
+            self._click_channel = None
+            self._high_click = None
+            self._low_click = None
+
+    def _make_click_sound(self, freq):
+        samples = int(SNARE_SAMPLE_RATE * (self.duration / 1000.0))
+        t = np.linspace(0, self.duration / 1000.0, samples, endpoint=False, dtype=np.float32)
+        click = (np.sin(2 * np.pi * freq * t) * np.exp(-25.0 * t) * 0.8).astype(np.float32)
+        stereo = np.column_stack((click, click))
+        return pygame.sndarray.make_sound((stereo * SNARE_BIT_DEPTH).astype(np.int16))
         
     def update_volume(self, volume):
         with self.lock:
             self.volume = volume
-            self.duration = int(30 + volume * 30)
     
     def set_bpm(self, bpm):
         with self.lock:
@@ -164,6 +247,9 @@ class HighPrecisionMetronome:
             
     def prepare_start(self):
         self.current_beat = -1.0
+
+    def reset_to(self, beat):
+        self.current_beat = beat - 1.0
         
     def synchronized_start(self, start_time):
         self.current_beat = -1.0
@@ -173,17 +259,29 @@ class HighPrecisionMetronome:
 
     def play_click(self, is_downbeat=False):
         try:
-            if self.enabled and winsound is not None:
+            if not self.enabled:
+                return
+            if self._high_click is None or self._low_click is None:
+                self._init_click_sounds()
+            snd = self._high_click if is_downbeat else self._low_click
+            if snd is not None:
+                if self._click_channel is None:
+                    self._click_channel = pygame.mixer.find_channel()
+                if self._click_channel is not None:
+                    self._click_channel.set_volume(self.volume)
+                    self._click_channel.play(snd)
+                    return
+            if winsound is not None:
                 winsound.Beep(self.high_freq if is_downbeat else self.low_freq, self.duration)
-        except:
-            pass
+        except Exception:
+            LOGGER.exception("Metronome click failed")
     
     def check_tick(self, beat_pos):
         if not self.enabled: return
         cb = int(beat_pos)
         if cb > int(self.current_beat):
             is_down = (cb % self.beats_per_bar) == 0
-            threading.Thread(target=self.play_click, args=(is_down,), daemon=True).start()
+            self.play_click(is_down)
         self.current_beat = beat_pos
 
 # Snare sound generation constants
@@ -245,6 +343,21 @@ class Modulator:
         self.fwd_only = False
         self.rev_only = False
         self.fine_tune = 0.0
+
+    @staticmethod
+    def _hash01(seed):
+        mask = (1 << 64) - 1
+        x = (int(seed) + 0x9E3779B97F4A7C15) & mask
+        x ^= (x >> 30)
+        x = (x * 0xBF58476D1CE4E5B9) & mask
+        x ^= (x >> 27)
+        x = (x * 0x94D049BB133111EB) & mask
+        x ^= (x >> 31)
+        return float((x & ((1 << 53) - 1)) / float(1 << 53))
+
+    @staticmethod
+    def _hash_signed(seed):
+        return Modulator._hash01(seed) * 2.0 - 1.0
         
     def get_value(self, beat_position, bpm=120.0, env_attack=0.1, env_release=0.5):
         # Note: env_attack and env_release defaults should match VideoMixer.__init__ values
@@ -254,7 +367,8 @@ class Modulator:
             cp = ((beat_position / self.rate) + self.phase) % 1.0
             value = 0.0
             if self.wave_type == "sine":
-                value = Modulator._sin_table[int(cp * 4095)]
+                idx = max(0, min(4095, int(cp * 4095)))
+                value = Modulator._sin_table[idx]
             elif self.wave_type == "square":
                 value = 1.0 if cp < 0.5 else -1.0
             elif self.wave_type == "triangle":
@@ -303,10 +417,8 @@ class Modulator:
                 # Random value that changes each cycle
                 # Use beat position divided by rate to get cycle number
                 cycle = int(beat_position / self.rate)
-                # Use cycle as seed for deterministic randomness within same cycle
-                np.random.seed(cycle % 10000)
-                value = np.random.uniform(-1.0, 1.0)
-                np.random.seed(None)  # Reset seed to restore true randomness elsewhere
+                seed = (cycle << 20) ^ int(self.phase * 100000) ^ int(self.rate * 10000)
+                value = Modulator._hash_signed(seed)
             if self.invert: value = -value
             if self.pos_only: value = max(0, value)
             elif self.neg_only: value = min(0, value)
@@ -319,8 +431,7 @@ class Modulator:
             
             return value * self.depth
         except Exception as e:
-            print(f"ERROR in Modulator.get_value: {e}")
-            traceback.print_exc()
+            LOGGER.exception("ERROR in Modulator.get_value: %s", e)
             return 0.0  # Safe default
     
     def to_dict(self):
@@ -379,6 +490,15 @@ class VideoChannel:
     STEPS_PER_BAR = 16
     BEATS_PER_BAR = 4.0
     SPEED_MULTIPLIERS = [1.0, 2.0, 0.5, -1.0, 0.0]  # Gray, Yellow, Blue, Red, Black
+    MODULATOR_ATTRS = (
+        "brightness_mod", "contrast_mod", "saturation_mod", "opacity_mod",
+        "loop_start_mod", "rgb_mod", "blur_mod", "zoom_mod", "pixel_mod", "chroma_mod",
+        "mosh_mod", "echo_mod", "slicer_mod", "mirror_center_mod", "speed_mod",
+        "kaleidoscope_mod", "vignette_mod", "color_shift_mod", "spin_mod",
+        "dis_particle_mod", "dis_thanos_mod", "dis_glitch_mod", "dis_scatter_mod",
+        "dis_ember_mod", "dis_rain_mod",
+    )
+    PRIMARY_MODULATOR_ATTRS = ("brightness_mod", "contrast_mod", "saturation_mod", "opacity_mod")
     
     def __init__(self, target_width, target_height):
         self.video_path = None
@@ -627,16 +747,7 @@ class VideoChannel:
              'loop_start_beat': self.loop_start_beat,
              'loop_end_beat': self.loop_end_beat,
              'manual_loop_enabled': self.manual_loop_enabled,
-             'brightness_mod': self.brightness_mod.to_dict(), 'contrast_mod': self.contrast_mod.to_dict(),
-             'saturation_mod': self.saturation_mod.to_dict(), 'opacity_mod': self.opacity_mod.to_dict(),
-             'loop_start_mod': self.loop_start_mod.to_dict(), 'rgb_mod': self.rgb_mod.to_dict(),
-             'blur_mod': self.blur_mod.to_dict(), 'zoom_mod': self.zoom_mod.to_dict(), 'pixel_mod': self.pixel_mod.to_dict(),
-             'chroma_mod': self.chroma_mod.to_dict(), 'mosh_mod': self.mosh_mod.to_dict(),
-             'echo_mod': self.echo_mod.to_dict(), 'slicer_mod': self.slicer_mod.to_dict(),
-             'mirror_center_mod': self.mirror_center_mod.to_dict(), 'speed_mod': self.speed_mod.to_dict(),
-             'kaleidoscope_mod': self.kaleidoscope_mod.to_dict(), 'vignette_mod': self.vignette_mod.to_dict(),
-             'color_shift_mod': self.color_shift_mod.to_dict(), 'spin_amount': self.spin_amount,
-             'spin_mod': self.spin_mod.to_dict(),
+             'spin_amount': self.spin_amount,
              'dis_particle_enabled': self.dis_particle_enabled, 'dis_particle_amount': self.dis_particle_amount,
              'dis_particle_mode': self.dis_particle_mode, 'dis_particle_mod': self.dis_particle_mod.to_dict(),
              'dis_particle_trigger_enabled': self.dis_particle_trigger_enabled, 'dis_particle_trigger_beat': self.dis_particle_trigger_beat,
@@ -668,6 +779,8 @@ class VideoChannel:
              'shake_vertical': self.shake_vertical, 'shake_tilt': self.shake_tilt,
              'shake_zoom': self.shake_zoom, 'shake_blur': self.shake_blur,
              'shake_frequency': self.shake_frequency}
+        for mod_attr in self.MODULATOR_ATTRS:
+            d[mod_attr] = getattr(self, mod_attr).to_dict()
         if include_video:
             d['video_path'] = self.video_path
         return d
@@ -767,7 +880,7 @@ class VideoChannel:
             self.loop_start_beat = d.get('loop_start_beat', 0.0)
             self.loop_end_beat = d.get('loop_end_beat', d.get('loop_end_frame', 0.0))  # Backward compatibility
             self.manual_loop_enabled = d.get('manual_loop_enabled', False)
-            for m in ['brightness_mod', 'contrast_mod', 'saturation_mod', 'opacity_mod', 'loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mosh_mod', 'echo_mod', 'slicer_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'dis_particle_mod', 'dis_thanos_mod', 'dis_glitch_mod', 'dis_scatter_mod', 'dis_ember_mod', 'dis_rain_mod']:
+            for m in self.MODULATOR_ATTRS:
                 if m in d:
                     getattr(self, m).from_dict(d[m])
             if load_video and d.get('video_path'):
@@ -841,15 +954,8 @@ class VideoChannel:
             self.loop_start_beat = 0.0
             self.loop_end_beat = 0.0
             self.manual_loop_enabled = False
-            self.brightness_mod.reset()
-            self.contrast_mod.reset()
-            self.saturation_mod.reset()
-            self.opacity_mod.reset()
-            self.loop_start_mod.reset()
-            self.rgb_mod.reset()
-            self.blur_mod.reset()
-            self.zoom_mod.reset()
-            self.pixel_mod.reset()
+            for mod_attr in self.MODULATOR_ATTRS:
+                getattr(self, mod_attr).reset()
             self.chroma_mod.reset()
             self.chroma_mod.wave_type = "sine"
             self.chroma_mod.rate = 1.0
@@ -896,7 +1002,6 @@ class VideoChannel:
             self.dis_particle_enabled = False
             self.dis_particle_amount = 0.0
             self.dis_particle_mode = "LFO"
-            self.dis_particle_mod.reset()
             self.dis_particle_trigger_enabled = False
             self.dis_particle_trigger_beat = 0.0
             self.dis_particle_trigger_duration = 1.0
@@ -905,7 +1010,6 @@ class VideoChannel:
             self.dis_thanos_enabled = False
             self.dis_thanos_amount = 0.0
             self.dis_thanos_mode = "LFO"
-            self.dis_thanos_mod.reset()
             self.dis_thanos_trigger_enabled = False
             self.dis_thanos_trigger_beat = 0.0
             self.dis_thanos_trigger_duration = 1.0
@@ -914,7 +1018,6 @@ class VideoChannel:
             self.dis_glitch_enabled = False
             self.dis_glitch_amount = 0.0
             self.dis_glitch_mode = "LFO"
-            self.dis_glitch_mod.reset()
             self.dis_glitch_trigger_enabled = False
             self.dis_glitch_trigger_beat = 0.0
             self.dis_glitch_trigger_duration = 1.0
@@ -923,7 +1026,6 @@ class VideoChannel:
             self.dis_scatter_enabled = False
             self.dis_scatter_amount = 0.0
             self.dis_scatter_mode = "LFO"
-            self.dis_scatter_mod.reset()
             self.dis_scatter_trigger_enabled = False
             self.dis_scatter_trigger_beat = 0.0
             self.dis_scatter_trigger_duration = 1.0
@@ -932,7 +1034,6 @@ class VideoChannel:
             self.dis_ember_enabled = False
             self.dis_ember_amount = 0.0
             self.dis_ember_mode = "LFO"
-            self.dis_ember_mod.reset()
             self.dis_ember_trigger_enabled = False
             self.dis_ember_trigger_beat = 0.0
             self.dis_ember_trigger_duration = 1.0
@@ -941,7 +1042,6 @@ class VideoChannel:
             self.dis_rain_enabled = False
             self.dis_rain_amount = 0.0
             self.dis_rain_mode = "LFO"
-            self.dis_rain_mod.reset()
             self.dis_rain_trigger_enabled = False
             self.dis_rain_trigger_beat = 0.0
             self.dis_rain_trigger_duration = 1.0
@@ -974,6 +1074,14 @@ class VideoChannel:
                 del self.resized_cache[k]
         self.resized_cache[frame_idx] = resized
         return resized
+
+    def _smooth_noise(self, t, salt):
+        i0 = math.floor(t)
+        f = t - i0
+        v0 = Modulator._hash_signed(i0 * 4099 + salt)
+        v1 = Modulator._hash_signed((i0 + 1) * 4099 + salt)
+        sf = f * f * (3.0 - 2.0 * f)
+        return v0 + (v1 - v0) * sf
     
     def _apply_mirror(self, frame, beat_pos, bpm, env_attack, env_release):
         if not self.mirror_enabled:
@@ -990,18 +1098,19 @@ class VideoChannel:
         
         h, w = frame.shape[:2]
         
+        out = frame
         if self.mirror_mode == "Horizontal":
             split_x = int(w * center_offset)
             left = frame[:, :split_x]
             # Resize left portion to half width, then mirror
             left_resized = cv2.resize(left, (w//2, h), interpolation=cv2.INTER_LINEAR)
-            return np.hstack([left_resized, cv2.flip(left_resized, 1)])
+            out = np.hstack([left_resized, cv2.flip(left_resized, 1)])
         elif self.mirror_mode == "Vertical":
             split_y = int(h * center_offset)
             top = frame[:split_y, :]
             # Resize top portion to half height, then mirror
             top_resized = cv2.resize(top, (w, h//2), interpolation=cv2.INTER_LINEAR)
-            return np.vstack([top_resized, cv2.flip(top_resized, 0)])
+            out = np.vstack([top_resized, cv2.flip(top_resized, 0)])
         elif self.mirror_mode == "Quad":
             split_y = int(h * center_offset)
             split_x = int(w * center_offset)
@@ -1009,7 +1118,7 @@ class VideoChannel:
             # Resize to quarter size
             q_resized = cv2.resize(q, (w//2, h//2), interpolation=cv2.INTER_LINEAR)
             top = np.hstack([q_resized, cv2.flip(q_resized, 1)])
-            return np.vstack([top, cv2.flip(top, 0)])
+            out = np.vstack([top, cv2.flip(top, 0)])
         elif self.mirror_mode == "Kaleido":
             split_y = int(h * center_offset)
             split_x = int(w * center_offset)
@@ -1018,8 +1127,10 @@ class VideoChannel:
             q_flip = cv2.flip(q_resized, 1)
             top = np.hstack([q_resized, q_flip])
             bot = cv2.flip(top, 0)
-            return np.vstack([top, bot])
-        return frame
+            out = np.vstack([top, bot])
+        if out.shape[0] != h or out.shape[1] != w:
+            out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
+        return out
     
     def _get_dis_amount(self, mode, base_amount, modulator, beat_pos, 
                         trigger_enabled=False, trigger_beat=0.0, trigger_duration=1.0, mixer=None,
@@ -1074,8 +1185,9 @@ class VideoChannel:
         fallen_frame = np.roll(frame, offset, axis=0)
         fallen_frame[:offset, :] = 0
         
-        result[~mask] = fallen_frame[~mask]
-        result[~mask] = result[~mask] * (1 - amount * 0.5)
+        fade = np.clip(amount, 0.0, 1.0)
+        dissolved = fallen_frame * (1.0 - fade * 0.5) + frame * (fade * 0.2)
+        result[~mask] = dissolved[~mask]
         
         return result
     
@@ -1096,7 +1208,8 @@ class VideoChannel:
         scatter_x = int(amount * 50)
         scattered = np.roll(frame, scatter_x, axis=1)
         
-        result[~mask] = 0  # Snapped pixels disappear
+        fade = np.clip(amount, 0.0, 1.0)
+        result[~mask] = (scattered[~mask] * (1.0 - fade)).astype(frame.dtype)
         
         return result
     
@@ -1750,54 +1863,25 @@ class VideoChannel:
         if self.shake_amount > 0:
             frame = frame.copy()  # Copy frame once for all shake transformations
             h, w = frame.shape[:2]
-            
-            # Generate random values for each component using different seeds
-            # Different cycle multipliers (17.3, 23.7, 31.1, 13.9, 19.7) create varied, 
-            # independent shake patterns for each component
-            # Apply frequency control - lower values = slower shake
+
             freq_adjusted_pos = beat_pos * self.shake_frequency
-            cycle_h = int(freq_adjusted_pos * 17.3)
-            cycle_v = int(freq_adjusted_pos * 23.7)
-            cycle_t = int(freq_adjusted_pos * 31.1)
-            cycle_z = int(freq_adjusted_pos * 13.9)
-            cycle_b = int(freq_adjusted_pos * 19.7)
-            
-            # Generate all random values in a single block for performance
-            np.random.seed(cycle_h % 10000)
-            rand_h = np.random.uniform(-1.0, 1.0) if self.shake_horizontal > 0 else 0
-            np.random.seed(cycle_v % 10000)
-            rand_v = np.random.uniform(-1.0, 1.0) if self.shake_vertical > 0 else 0
-            np.random.seed(cycle_t % 10000)
-            rand_t = np.random.uniform(-1.0, 1.0) if self.shake_tilt > 0 else 0
-            np.random.seed(cycle_z % 10000)
-            rand_z = np.random.uniform(-1.0, 1.0) if self.shake_zoom > 0 else 0
-            np.random.seed(cycle_b % 10000)
-            rand_b = abs(np.random.uniform(-1.0, 1.0)) if self.shake_blur > 0 else 0
-            np.random.seed(None)
-            
-            # Horizontal shake
-            offset_x = int(rand_h * self.shake_amount * self.shake_horizontal * 50) if self.shake_horizontal > 0 else 0
-            
-            # Vertical shake
-            offset_y = int(rand_v * self.shake_amount * self.shake_vertical * 50) if self.shake_vertical > 0 else 0
-            
-            # Apply translation if needed
-            if offset_x != 0 or offset_y != 0:
-                M_translate = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
-                frame = cv2.warpAffine(frame, M_translate, (w, h))
-            
-            # Tilt (rotation) shake
-            if self.shake_tilt > 0:
-                angle = rand_t * self.shake_amount * self.shake_tilt * 15  # Max 15 degrees
-                M_rotate = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
-                frame = cv2.warpAffine(frame, M_rotate, (w, h))
-            
-            # Zoom shake
-            if self.shake_zoom > 0:
-                scale = 1.0 + rand_z * self.shake_amount * self.shake_zoom * 0.3  # Max 30% zoom variation
-                M_zoom = cv2.getRotationMatrix2D((w/2, h/2), 0, scale)
-                frame = cv2.warpAffine(frame, M_zoom, (w, h))
-            
+            rand_h = self._smooth_noise(freq_adjusted_pos * 17.3, 101) if self.shake_horizontal > 0 else 0.0
+            rand_v = self._smooth_noise(freq_adjusted_pos * 23.7, 211) if self.shake_vertical > 0 else 0.0
+            rand_t = self._smooth_noise(freq_adjusted_pos * 31.1, 307) if self.shake_tilt > 0 else 0.0
+            rand_z = self._smooth_noise(freq_adjusted_pos * 13.9, 401) if self.shake_zoom > 0 else 0.0
+            rand_b = abs(self._smooth_noise(freq_adjusted_pos * 19.7, 503)) if self.shake_blur > 0 else 0.0
+
+            offset_x = rand_h * self.shake_amount * self.shake_horizontal * 50.0
+            offset_y = rand_v * self.shake_amount * self.shake_vertical * 50.0
+            angle = rand_t * self.shake_amount * self.shake_tilt * 15.0 if self.shake_tilt > 0 else 0.0
+            scale = 1.0 + rand_z * self.shake_amount * self.shake_zoom * 0.3 if self.shake_zoom > 0 else 1.0
+
+            if abs(offset_x) > 0.001 or abs(offset_y) > 0.001 or abs(angle) > 0.001 or abs(scale - 1.0) > 0.001:
+                M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, scale)
+                M[0, 2] += offset_x
+                M[1, 2] += offset_y
+                frame = cv2.warpAffine(frame, M, (w, h))
+
             # Blur shake
             if self.shake_blur > 0:
                 blur_val = rand_b * self.shake_amount * self.shake_blur
@@ -1926,8 +2010,9 @@ class SequencerWidget(tk.Canvas):
         """Set step value directly on channel - avoids stale references"""
         if not (0 <= idx < 16):
             raise IndexError(f"Sequencer step index {idx} out of range (must be 0-15)")
-        if not isinstance(value, int) or not (0 <= value <= 4):
-            raise ValueError(f"Sequencer step value {value} must be an integer between 0-4")
+        max_value = len(self.colors) - 1
+        if not isinstance(value, int) or not (0 <= value <= max_value):
+            raise ValueError(f"Sequencer step value {value} must be an integer between 0-{max_value}")
         getattr(self.channel, self.attr_name)[idx] = value
 
     # Add new method to update current step indicator
@@ -1965,6 +2050,7 @@ class TimelineWidget(tk.Canvas):
         self.waveform_samples = None  # Raw normalized samples
         self.sample_rate = 44100
         self.duration_sec = 0
+        self.waveform_error = None
         
         # Dragging state
         self.dragging = None  # 'start', 'end', or None
@@ -1983,18 +2069,38 @@ class TimelineWidget(tk.Canvas):
         self.delete("all")
         w = self.winfo_width() or 800
         h = self.winfo_height() or 120
-        self.create_text(w // 2, h // 2, text="No Audio Loaded", fill="#666", font=("Arial", 12))
+        text = self.waveform_error if self.waveform_error else "No Audio Loaded"
+        self.create_text(w // 2, h // 2, text=text, fill="#666", font=("Arial", 12))
     
     def load_audio_waveform(self, audio_path):
         """Extract and cache waveform data from audio file using min/max approach."""
         try:
-            # Load audio as a pygame Sound object to extract samples
-            # Note: pygame.sndarray works best with WAV files; other formats may need conversion
+            self.waveform_error = None
+            samples = None
             sound = pygame.mixer.Sound(audio_path)
             self.duration_sec = sound.get_length()
-            
-            # Extract sample data using pygame.sndarray
-            samples = pygame.sndarray.array(sound)
+            try:
+                samples = pygame.sndarray.array(sound)
+            except Exception:
+                samples = None
+            if samples is None:
+                ext = os.path.splitext(audio_path)[1].lower()
+                if ext == ".wav":
+                    with wave.open(audio_path, "rb") as wf:
+                        self.duration_sec = wf.getnframes() / max(1, wf.getframerate())
+                        raw = wf.readframes(wf.getnframes())
+                        width = wf.getsampwidth()
+                        if width == 2:
+                            samples = np.frombuffer(raw, dtype=np.int16)
+                        elif width == 1:
+                            samples = np.frombuffer(raw, dtype=np.int8)
+                        else:
+                            raise ValueError(f"Unsupported WAV sample width: {width}")
+                        channels = wf.getnchannels()
+                        if channels > 1:
+                            samples = samples.reshape(-1, channels)
+                if samples is None:
+                    raise ValueError("Waveform preview unsupported for this format on current decoder")
             
             # Convert to mono if stereo (average channels)
             if samples.ndim > 1 and samples.shape[1] > 1:
@@ -2012,10 +2118,11 @@ class TimelineWidget(tk.Canvas):
             self.redraw()
             
         except Exception as e:
-            print(f"Failed to load waveform: {e}")
+            LOGGER.warning("Failed to load waveform: %s", e)
             # Clear waveform but don't crash
             self.waveform_samples = None
             self.duration_sec = 0
+            self.waveform_error = f"Waveform unavailable: {e}"
             self.draw_empty()
     
     def redraw(self):
@@ -2197,13 +2304,8 @@ class TimelineWidget(tk.Canvas):
         # Calculate current playback position
         if hasattr(self.mixer, 'beat_position'):
             beat_pos = self.mixer.beat_position
-            bar_pos = beat_pos / self.mixer.beats_per_bar
-            
             bpm = self.mixer.bpm
-            beats_per_bar = self.mixer.beats_per_bar
-            bar_duration_sec = (60.0 / bpm) * beats_per_bar
-            
-            time_sec = bar_pos * bar_duration_sec
+            time_sec = beat_pos * (60.0 / bpm)
             x = (time_sec / self.duration_sec) * w
             
             # Update playhead position
@@ -2395,14 +2497,13 @@ class FrameRecorder(threading.Thread):
                         print(f"Warning: Dropped approximately {frames_behind} frame(s) due to timing lag")
                     next_frame_time = now + self.frame_interval
             else:
-                # Sleep until next frame time (with small buffer)
-                sleep_time = next_frame_time - now - 0.0005
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                
-                # After sleep, busy-wait for remaining time
+                # Sleep until near the deadline, then do a short final spin for precision
+                sleep_time = next_frame_time - now
+                if sleep_time > 0.001:
+                    time.sleep(sleep_time - 0.0005)
                 while time.perf_counter() < next_frame_time:
-                    pass
+                    if (next_frame_time - time.perf_counter()) > 0.001:
+                        time.sleep(0.0005)
         
         self.recording_end_time = time.perf_counter()
         self.writer.release()
@@ -2424,6 +2525,36 @@ class FrameRecorder(threading.Thread):
         """Signal the thread to stop."""
         self.running = False
 
+
+class TransportClock:
+    def __init__(self, bpm=120.0, pll_gain=0.1, deadband_sec=0.01):
+        self.bpm = bpm
+        self.start_time = 0.0
+        self.offset_sec = 0.0
+        self.pll_gain = pll_gain
+        self.deadband_sec = deadband_sec
+
+    def reset(self, start_time, bpm, offset_sec=0.0):
+        self.start_time = start_time
+        self.bpm = bpm
+        self.offset_sec = offset_sec
+
+    def set_bpm(self, bpm):
+        self.bpm = bpm
+
+    def set_offset(self, offset_sec):
+        self.offset_sec = offset_sec
+
+    def beats(self, now, audio_position_ms=None):
+        elapsed = max(0.0, now - self.start_time - self.offset_sec)
+        if audio_position_ms is not None and audio_position_ms >= 0:
+            audio_elapsed = audio_position_ms / 1000.0
+            drift = audio_elapsed - elapsed
+            if abs(drift) > self.deadband_sec:
+                self.start_time -= drift * self.pll_gain
+                elapsed = max(0.0, now - self.start_time - self.offset_sec)
+        return elapsed * self.bpm / 60.0
+
 class VideoProcessor(threading.Thread):
     def __init__(self, mixer):
         super().__init__(daemon=True)
@@ -2432,6 +2563,9 @@ class VideoProcessor(threading.Thread):
         self.frame_queue = queue.Queue(maxsize=2)
         self.start_time = 0
         self.lock = threading.Lock()
+        self.target_fps = 60.0
+        self.transport = TransportClock(bpm=self.mixer.bpm)
+        self._prev_transport_beats = 0.0
     
     def run(self):
         try:
@@ -2439,12 +2573,14 @@ class VideoProcessor(threading.Thread):
             k = ctypes.windll.kernel32
             k.SetThreadPriority(k.GetCurrentThread(), 15)
             k.SetPriorityClass(k.GetCurrentProcess(), 0x80)
-        except: pass
+        except Exception:
+            pass
         last = time.perf_counter()
         
         while self.running:
+            loop_start = time.perf_counter()
             if not self.mixer.playing or not self.mixer.sync_ready:
-                time.sleep(0.001)
+                time.sleep(0.01)
                 last = time.perf_counter()
                 continue
             now = time.perf_counter()
@@ -2452,66 +2588,33 @@ class VideoProcessor(threading.Thread):
             last = now
             with self.lock: st = self.start_time
             if st <= 0:
-                time.sleep(0.001)
+                time.sleep(0.005)
                 continue
             
-            # Use offset from GUI (convert ms to seconds)
             offset_sec = self.mixer.latency_ms.get() / 1000.0
-            
-            # --- TIGHT SYNC CORE ---
-            # Visuals run on (now - start_time - offset)
-            # This allows shifting the visual clock backwards or forwards relative to audio
-            effective_time = (now - st) - offset_sec
-            if effective_time < 0: effective_time = 0
-            
-            total_beats = effective_time * self.mixer.bpm / 60.0
-            
+            self.transport.set_bpm(self.mixer.bpm)
+            self.transport.set_offset(offset_sec)
+
+            audio_pos_ms = self.mixer.audio_track.get_time_ms() if self.mixer.audio_track.is_active() else None
+            transport_beats = self.transport.beats(now, audio_position_ms=audio_pos_ms)
+            total_beats = transport_beats
+
             if self.mixer.global_loop_enabled:
-                # Loop markers are now in beats
                 loop_len_beats = self.mixer.global_loop_end - self.mixer.global_loop_start
-                if loop_len_beats <= 0: loop_len_beats = 16
+                if loop_len_beats <= 0:
+                    loop_len_beats = 16
                 start_beats = self.mixer.global_loop_start
-                
-                # Simple time-based loop detection
-                # Calculate elapsed time in milliseconds
-                elapsed_ms = (now - st) * 1000.0
-                
-                # Calculate loop boundaries in ms (using beats directly)
-                beat_duration_ms = (60.0 / self.mixer.bpm) * 1000.0
-                loop_start_ms = self.mixer.global_loop_start * beat_duration_ms
-                
-                # Drift correction: sync to audio clock if active
-                if self.mixer.audio_track.is_active():
-                    audio_pos = self.mixer.audio_track.get_time_ms()
-                    expected_pos = loop_start_ms + elapsed_ms
-                    drift = audio_pos - expected_pos
-                    if abs(drift) > 10:
-                        # Apply 10% correction factor to smooth out jitter
-                        with self.lock:
-                            self.start_time -= (drift / 1000.0) * 0.1
-                        # Recalculate elapsed_ms after adjustment
-                        elapsed_ms = (now - self.start_time) * 1000.0
-                
-                loop_end_ms = self.mixer.global_loop_end * beat_duration_ms
-                loop_duration_ms = loop_end_ms - loop_start_ms
-                
-                # If we've passed the loop end, jump back
-                if elapsed_ms >= loop_duration_ms:
-                    # Restart audio at loop start
-                    if self.mixer.audio_track.enabled:
-                        self.mixer.audio_track.play(int(loop_start_ms))
-                    # Reset the clock so visuals also jump back
-                    with self.lock: 
-                        self.start_time = now
-                    # Set beat position to loop start
-                    total_beats = start_beats
-                    # Reset metronome to one beat before loop start so check_tick() detects the downbeat
-                    # (check_tick uses: if int(beat_pos) > int(current_beat) to trigger ticks)
-                    self.mixer.metronome.current_beat = start_beats - 1.0
-                else:
-                    # Within loop range - calculate beat position from elapsed time
-                    rel_beats = (elapsed_ms / 1000.0) * (self.mixer.bpm / 60.0)
-                    total_beats = start_beats + rel_beats
+                rel_beats = max(0.0, transport_beats)
+                total_beats = start_beats + (rel_beats % loop_len_beats)
+
+                prev_rel = max(0.0, self._prev_transport_beats)
+                crossed_loop = int(rel_beats / loop_len_beats) > int(prev_rel / loop_len_beats)
+                if crossed_loop and self.mixer.audio_track.enabled:
+                    beat_duration_ms = (60.0 / self.mixer.bpm) * 1000.0
+                    loop_start_ms = int(self.mixer.global_loop_start * beat_duration_ms)
+                    self.mixer.audio_track.play(loop_start_ms)
+                    self.mixer.metronome.reset_to(start_beats)
+            self._prev_transport_beats = transport_beats
 
             bp = total_beats
             
@@ -2535,12 +2638,17 @@ class VideoProcessor(threading.Thread):
                         except (queue.Full, queue.Empty):
                             pass  # Queue operations can safely fail
             except Exception as e:
-                print(f"ERROR in VideoProcessor frame processing: {e}")
-                traceback.print_exc()
-            time.sleep(0.001)
+                LOGGER.exception("ERROR in VideoProcessor frame processing: %s", e)
+            elapsed = time.perf_counter() - loop_start
+            target_dt = 1.0 / self.target_fps
+            if elapsed < target_dt:
+                time.sleep(target_dt - elapsed)
     
     def start_proc(self, st):
-        with self.lock: self.start_time = st
+        with self.lock:
+            self.start_time = st
+        self.transport.reset(st, self.mixer.bpm, self.mixer.latency_ms.get() / 1000.0)
+        self._prev_transport_beats = 0.0
         if not self.is_alive():
             self.running = True
             self.start()
@@ -2548,11 +2656,15 @@ class VideoProcessor(threading.Thread):
         self.running = False
         with self.lock: self.start_time = 0
         while not self.frame_queue.empty():
-            try: self.frame_queue.get_nowait()
-            except: break
+            try:
+                self.frame_queue.get_nowait()
+            except Exception:
+                break
     def get_frame(self):
-        try: return self.frame_queue.get_nowait()
-        except: return None
+        try:
+            return self.frame_queue.get_nowait()
+        except Exception:
+            return None
 
 class VideoMixer:
     BLEND_MODES = ["normal", "add", "multiply", "screen", "overlay", "difference",
@@ -2702,10 +2814,13 @@ class VideoMixer:
             c['spin'].set(0.0)
             if ch.frame_count > 0:
                 c['bl_lbl'].config(text=f"0/{ch.frame_count}")
-            for k in ['br_m', 'co_m', 'sa_m', 'op_m']:
-                self.reset_mod(c[f'{k}_m'])
-            for k in ['loop_start_mod', 'rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 'mirror_center_mod', 'speed_mod', 'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod', 'mosh_mod', 'echo_mod', 'slicer_mod']:
-                self.reset_mod(c[k])
+            for short_key in ("br", "co", "sa", "op"):
+                self.reset_mod(c[f"{short_key}_m"])
+            for mod_attr in VideoChannel.MODULATOR_ATTRS:
+                if mod_attr in VideoChannel.PRIMARY_MODULATOR_ATTRS:
+                    continue
+                if mod_attr in c:
+                    self.reset_mod(c[mod_attr])
             c['seq_gate_w'].update_ui()
             c['seq_stutter_w'].update_ui()
             c['seq_speed_w'].update_ui()
@@ -2755,8 +2870,9 @@ class VideoMixer:
             c['color_shift'].set(0.0)
             c['spin'].set(0.0)
             # Reset all mod controls on bonus tab
-            for mod_key in ['rgb_mod', 'blur_mod', 'zoom_mod', 'pixel_mod', 'chroma_mod', 
-                            'kaleidoscope_mod', 'vignette_mod', 'color_shift_mod', 'spin_mod']:
+            for mod_key in VideoChannel.MODULATOR_ATTRS:
+                if mod_key in VideoChannel.PRIMARY_MODULATOR_ATTRS:
+                    continue
                 if mod_key in c:
                     self.reset_mod(c[mod_key])
             
@@ -3973,8 +4089,9 @@ class VideoMixer:
         c['vignette_transparency'].set(ch.vignette_transparency)
         c['color_shift'].set(ch.color_shift_amount)
         c['spin'].set(ch.spin_amount)
-        for k, m in [('br', ch.brightness_mod), ('co', ch.contrast_mod), ('sa', ch.saturation_mod), ('op', ch.opacity_mod)]:
-            mc = c[f'{k}_m']
+        for short_key, mod_attr in zip(("br", "co", "sa", "op"), VideoChannel.PRIMARY_MODULATOR_ATTRS):
+            m = getattr(ch, mod_attr)
+            mc = c[f'{short_key}_m']
             mc['en'].set(m.enabled)
             mc['wv'].set(m.wave_type)
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
@@ -3982,14 +4099,11 @@ class VideoMixer:
             mc['pos'].set(m.pos_only)
             mc['neg'].set(m.neg_only)
             mc['inv'].set(m.invert)
-        for m, k in [(ch.loop_start_mod, 'loop_start_mod'), (ch.rgb_mod, 'rgb_mod'), 
-                     (ch.blur_mod, 'blur_mod'), (ch.zoom_mod, 'zoom_mod'), (ch.pixel_mod, 'pixel_mod'),
-                     (ch.chroma_mod, 'chroma_mod'), (ch.mosh_mod, 'mosh_mod'), 
-                     (ch.echo_mod, 'echo_mod'), (ch.slicer_mod, 'slicer_mod'),
-                     (ch.mirror_center_mod, 'mirror_center_mod'), (ch.speed_mod, 'speed_mod'),
-                     (ch.kaleidoscope_mod, 'kaleidoscope_mod'), (ch.vignette_mod, 'vignette_mod'),
-                     (ch.color_shift_mod, 'color_shift_mod'), (ch.spin_mod, 'spin_mod')]:
-            mc = c[k]
+        for mod_attr in VideoChannel.MODULATOR_ATTRS:
+            if mod_attr in VideoChannel.PRIMARY_MODULATOR_ATTRS or mod_attr not in c:
+                continue
+            m = getattr(ch, mod_attr)
+            mc = c[mod_attr]
             mc['en'].set(m.enabled)
             mc['wv'].set(m.wave_type)
             mc['rt'].set(Modulator.RATE_REVERSE.get(m.rate, "1"))
@@ -4097,49 +4211,52 @@ class VideoMixer:
         c['inv'].set(m.invert)
     
     def apply_blend_mode(self, a, b, mode, mix_a, mix_b):
-        if mode == "normal" or mode == "add":
-            return a * mix_a + b * mix_b
-        elif mode == "multiply":
-            combined = a * mix_a + b * mix_b
-            return combined * 4
+        eps = 1e-6
+        am = np.clip(a * mix_a, 0.0, 1.0)
+        bm = np.clip(b * mix_b, 0.0, 1.0)
+        total_mix = mix_a + mix_b
+        blend_mix = np.clip((mix_b / total_mix) if total_mix > eps else 0.0, 0.0, 1.0)
+
+        def color_dodge(x, y):
+            return np.where(y >= 1.0, 1.0, np.minimum(1.0, x / (1.0 - y + eps)))
+
+        def color_burn(x, y):
+            return np.where(y <= 0.0, 0.0, 1.0 - np.minimum(1.0, (1.0 - x) / (y + eps)))
+
+        if mode in ("normal", "add"):
+            return np.clip(am + bm, 0.0, 1.0)
+        if mode == "multiply":
+            blended = am * bm
         elif mode == "screen":
-            combined = a * mix_a + b * mix_b
-            return 1 - (1 - combined) * (1 - combined)
+            blended = 1.0 - (1.0 - am) * (1.0 - bm)
         elif mode == "overlay":
-            combined = a * mix_a + b * mix_b
-            return np.where(combined < 0.5, 2 * combined * combined, 1 - 2 * (1 - combined) * (1 - combined))
-        elif mode == "difference":
-            return np.abs(a * mix_a - b * mix_b)
-        elif mode == "exclusion":
-            combined = a * mix_a + b * mix_b
-            return combined - 2 * (a * mix_a) * (b * mix_b)
+            blended = np.where(am <= 0.5, 2.0 * am * bm, 1.0 - 2.0 * (1.0 - am) * (1.0 - bm))
         elif mode == "hard_light":
-            combined = a * mix_a + b * mix_b
-            return np.where(combined < 0.5, 2 * combined * combined, 1 - 2 * (1 - combined) * (1 - combined))
+            blended = np.where(bm <= 0.5, 2.0 * am * bm, 1.0 - 2.0 * (1.0 - am) * (1.0 - bm))
         elif mode == "soft_light":
-            combined = a * mix_a + b * mix_b
-            return (1 - 2 * combined) * combined * combined + 2 * combined * combined
+            d = np.where(am <= 0.25, ((16.0 * am - 12.0) * am + 4.0) * am, np.sqrt(am))
+            blended = np.where(bm <= 0.5, am - (1.0 - 2.0 * bm) * am * (1.0 - am), am + (2.0 * bm - 1.0) * (d - am))
         elif mode == "color_dodge":
-            combined = a * mix_a + b * mix_b
-            return np.minimum(1, combined / (1 - combined + 0.001))
+            blended = color_dodge(am, bm)
         elif mode == "color_burn":
-            combined = a * mix_a + b * mix_b
-            return 1 - np.minimum(1, (1 - combined) / (combined + 0.001))
-        elif mode == "darken":
-            return np.minimum(a * mix_a, b * mix_b)
-        elif mode == "lighten":
-            return np.maximum(a * mix_a, b * mix_b)
+            blended = color_burn(am, bm)
         elif mode == "linear_light":
-            combined = a * mix_a + b * mix_b
-            return np.clip(combined * 2 - 0.5, 0, 1)
-        elif mode == "pin_light":
-            am, bm = a * mix_a, b * mix_b
-            return np.where(bm < 0.5, np.minimum(am, 2 * bm), np.maximum(am, 2 * bm - 1))
+            blended = np.clip(am + 2.0 * bm - 1.0, 0.0, 1.0)
         elif mode == "vivid_light":
-            combined = a * mix_a + b * mix_b
-            return np.where(combined < 0.5, 1 - (1 - combined) / (2 * combined + 0.001), combined / (2 * (1 - combined) + 0.001))
+            blended = np.where(bm < 0.5, color_burn(am, 2.0 * bm), color_dodge(am, 2.0 * (bm - 0.5)))
+        elif mode == "pin_light":
+            blended = np.where(bm < 0.5, np.minimum(am, 2.0 * bm), np.maximum(am, 2.0 * bm - 1.0))
+        elif mode == "difference":
+            blended = np.abs(am - bm)
+        elif mode == "exclusion":
+            blended = am + bm - 2.0 * am * bm
+        elif mode == "darken":
+            blended = np.minimum(am, bm)
+        elif mode == "lighten":
+            blended = np.maximum(am, bm)
         else:
-            return a * mix_a + b * mix_b
+            blended = np.clip(am + bm, 0.0, 1.0)
+        return np.clip(am * (1.0 - blend_mix) + blended * blend_mix, 0.0, 1.0)
     
     def blend_frames(self, fa, oa, fb, ob, bp):
         try:
@@ -4754,15 +4871,15 @@ class VideoMixer:
                 print(f"Using loop-based audio offset: start={audio_ss:.3f}s (duration limited by -shortest)")
             
             # Build ffmpeg command based on output format
+            video_path = os.path.abspath(video_path)
+            audio_path = os.path.abspath(audio_path)
+            output_with_audio = os.path.abspath(output_with_audio)
+
             if output_format == 'mp4':
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
                     '-ss', str(audio_ss),  # Seek into audio to match recording start position
-                ]
-                if audio_duration is not None:
-                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
-                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'libx264',  # Re-encode to H.264 for MP4
                     '-preset', 'fast',
@@ -4772,17 +4889,15 @@ class VideoMixer:
                     '-b:a', '192k',
                     '-async', '1',  # Audio sync
                     '-shortest',
-                    output_with_audio
-                ])
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])
+                cmd.append(output_with_audio)
             elif output_format == 'mov':
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
                     '-ss', str(audio_ss),  # Seek into audio to match recording start position
-                ]
-                if audio_duration is not None:
-                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
-                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'copy',  # Copy video stream (MJPG is compatible with MOV)
                     '-c:a', 'aac',
@@ -4790,17 +4905,15 @@ class VideoMixer:
                     '-fps_mode', 'cfr',  # Constant frame rate
                     '-async', '1',  # Audio sync
                     '-shortest',
-                    output_with_audio
-                ])
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])
+                cmd.append(output_with_audio)
             else:  # avi
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
                     '-ss', str(audio_ss),  # Seek into audio to match recording start position
-                ]
-                if audio_duration is not None:
-                    cmd.extend(['-t', str(audio_duration)])  # Extract only the recorded segment
-                cmd.extend([
                     '-i', audio_path,
                     '-c:v', 'copy',
                     '-c:a', 'mp3',  # Use mp3 for AVI
@@ -4808,11 +4921,14 @@ class VideoMixer:
                     '-fps_mode', 'cfr',  # Constant frame rate
                     '-async', '1',  # Audio sync
                     '-shortest',
-                    output_with_audio
-                ])
+                ]
+                if audio_duration is not None:
+                    cmd.extend(['-t', str(audio_duration)])
+                cmd.append(output_with_audio)
             
             # Run ffmpeg
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
             
             if result.returncode != 0:
                 print(f"FFmpeg error (return code {result.returncode}):")
